@@ -12,7 +12,7 @@
 // Messages out: {type: 'status', stage, ...} {type: 'alive'} {type: 'ready', info} {type: 'backend', info}
 //               {type: 'seg-progress', id, index, frac}
 //               {type: 'segment', id, index, pcm (Int16Array, the pause after it included), spoken, ms, failed}
-//               {type: 'done', id} {type: 'cancelled', id}
+//               {type: 'done', id} {type: 'cancelled', id} {type: 'calibrated', base, per, backend, threads}
 //               {type: 'error', stage?, id?, index?, kind, message, threads, broken}
 
 import { engineBroken, errorKind, openWithFallback, pickBackend, shortError, tag, timed } from './backend.js';
@@ -31,6 +31,7 @@ let info = null;
 let toWasm = null; // while on WebGPU: () => the same model opened on WebAssembly
 let job = null; // the running synthesis: {id, signal}
 let queue = Promise.resolve();
+let asked = false; // a synthesis was asked for: the calibration is not worth delaying it
 
 const post = (msg, transfer) => self.postMessage(msg, transfer || []);
 
@@ -346,6 +347,30 @@ async function synth({ id, segments, from = 0, steps = 16, speed = 1.0, seed = 0
   }
 }
 
+// How fast this device speaks, for the page's estimates before its first job: one sentence (about 3 s of audio)
+// at 4 and at 8 steps, right after the warm-up, gives the real-time factor as base + per * steps. A short sentence
+// carries more fixed cost than a document's pieces, so the estimate leans long, never far.
+async function calibrate() {
+  if (asked || !engine) return;
+  try {
+    const text = 'Bugün hava çok güzel; öğleden sonra biraz yürüyüş yapalım mı?';
+    const rtfAt = async (steps) => {
+      const t0 = performance.now();
+      const out = await engine.say(text, { steps });
+      return (performance.now() - t0) / 1000 / (out.audio.length / info.sampleRate);
+    };
+    await rtfAt(4); // the first full-length run still compiles and allocates
+    if (asked) return;
+    const r4 = await rtfAt(4);
+    if (asked) return;
+    const r8 = await rtfAt(8);
+    const per = Math.max(0.0005, (r8 - r4) / 4);
+    post({ type: 'calibrated', base: Math.max(0.005, r4 - 4 * per), per, backend: info.backend, threads: info.threads });
+  } catch (e) {
+    console.warn('Ahenk Okur: calibration skipped', e);
+  }
+}
+
 // The page gets a kind (what to tell the visitor) and one short line; the whole error goes to the console. threads:
 // the threads it failed on, when one thread may do better; broken: the engine is unusable, start a new worker.
 function failure(e) {
@@ -359,9 +384,11 @@ function failure(e) {
 self.onmessage = ({ data }) => {
   if (data.type === 'init') {
     ready = init(data);
+    ready.then(() => { queue = queue.then(calibrate); }, () => {});
     ready.catch((e) => post({ type: 'error', stage: 'init', ...failure(e) }));
   } else if (data.type === 'synth') {
     if (job) job.signal.aborted = true; // one job at a time: a new one replaces the old
+    asked = true;
     queue = queue.then(() => synth(data)).catch((e) => post({ type: 'error', id: data.id, ...failure(e) }));
   } else if (data.type === 'cancel') {
     if (job && (data.id === undefined || job.id === data.id)) job.signal.aborted = true;

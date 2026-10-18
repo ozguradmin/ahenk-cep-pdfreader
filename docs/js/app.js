@@ -190,6 +190,11 @@ function onWorkerMessage(data) {
       renderEstimate();
       if (job && (job.state === 'waiting' || job.state === 'resuming')) sendJob();
       break;
+    case 'calibrated':
+      // this device's measured speed, for this backend and thread count (js/worker.js calibrate)
+      state.calib = { base: data.base, per: data.per };
+      renderEstimate();
+      break;
     case 'seg-progress':
       if (!job || data.id !== job.id) break;
       job.cur = data.index;
@@ -707,12 +712,13 @@ function rtf(steps) {
     else est = cost(0.2, 0.028);
   }
   if (device.mobile) est *= 2;
-  if (state.measured) {
-    // the decoder and the text stage cost the same at any number of steps
-    const m = state.measured;
-    const same = (s) => 0.08 + 0.01 * s;
-    est = m.rtf * (same(steps) / same(m.steps));
-  }
+  // Better than the guess: this device measured right after the model opened (js/worker.js calibrate), and better
+  // still a whole job it made, scaled to these steps by the measured shape (the decoder and the text stage cost
+  // the same at any number of steps).
+  const c = state.calib;
+  const shape = c ? (s) => c.base + c.per * s : (s) => 0.08 + 0.01 * s;
+  if (c) est = shape(steps);
+  if (state.measured) est = state.measured.rtf * (shape(steps) / shape(state.measured.steps));
   return est;
 }
 
