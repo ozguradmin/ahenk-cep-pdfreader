@@ -42,7 +42,9 @@ gösterilir. Telefonlarda ekran üretim boyunca açık tutulur (Wake Lock), kili
 | PDF düzeni, metin temizliği, cümlelere bölme (DOM'suz, Node'da test edilir) | `docs/js/text.js` |
 | OCR (tesseract.js, yalnızca gerektiğinde yüklenir) | `docs/js/ocr.js` |
 | Model: indirme + sha256 + önbellek, iş parçacıkları, bölüm bölüm sentez, iptal | `docs/js/worker.js` |
-| Ahenk Cep'in örnekleme döngüsü, arka uç seçimi, trnorm ön ucu, torch.randn | `docs/js/engine.js`, `backend.js`, `front.js`, `randn.js`, `docs/py/` |
+| Ahenk Cep'in örnekleme döngüsü, arka uç seçimi, torch.randn | `docs/js/engine.js`, `backend.js`, `randn.js` |
+| Metin ön ucu (okunuş: trnorm; EMA'nın alfabe, parçalama ve kelime sınırları): JavaScript'e çevrilmiş hâli varsayılan, Python'u (Pyodide) yalnızca yedek | `docs/js/front-native.js`, `docs/js/trnorm/`; yedek: `docs/js/front.js`, `docs/py/` |
+| Python ile birebir eşitlik testi (104.274 girdi, rastgele üretilmiş zor girdiler, Safari/Firefox/Chrome motorları) | `tools/parity/` |
 | Sesin saklanması (MP3 parçaları, kısa seslerde PCM) ve oynatıcı (üretilirken dinleme, dalga biçimi, kilit ekranı) | `docs/js/player.js` |
 | İşlerin cihazda saklanması (IndexedDB) ve kaldığı yerden devam | `docs/js/storage.js` |
 | MP3 (lamejs, ses üretilirken ayrı worker'da), WAV ve ID3 etiketi | `docs/js/mp3.js`, `docs/js/wav.js` |
@@ -56,10 +58,10 @@ Model dosyaları depoda değildir: sayfa onları Hugging Face model deposundan (
 ve Cache Storage'a koyar. Aynı adresteki (`ozguradmin.github.io`) Ahenk Cep demosu da aynı önbellek adını kullanır;
 birinde inen model ötekinde yeniden inmez. İki site birbirinin ayarına ya da servis çalışanına dokunmaz.
 
-Kütüphaneler jsdelivr'den, sabit sürümle gelir (`docs/js/config.js`): onnxruntime-web 1.30.0, Pyodide 0.27.7,
+Kütüphaneler jsdelivr'den, sabit sürümle gelir (`docs/js/config.js`): onnxruntime-web 1.30.0, Pyodide 0.27.7 (yalnızca yedek),
 pdf.js 5.7.284 (legacy derleme), fflate 0.8.2, lamejs 1.2.7, tesseract.js 7.0.0.
 
-Adres satırı seçenekleri: `?variant=fp32|f16|int8`, `?ep=wasm|webgpu`.
+Adres satırı seçenekleri: `?variant=fp32|f16|int8`, `?ep=wasm|webgpu`, `?front=js|py` (metin ön ucu).
 
 ## Yerelde açmak
 

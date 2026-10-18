@@ -32,10 +32,10 @@ export const MODELS = {
 
 export const DEFAULT_VARIANT = 'f16';
 
-// The text front-end: 'py' runs the Python (trnorm) in Pyodide; 'js' the JavaScript port in js/front-native.js,
-// with the Python as its fallback. The port is switched on once tools/parity has proven it gives the same output.
-// ?front=js|py overrides it for one visit.
-export const FRONT = 'py';
+// The text front-end: 'js' is the JavaScript port in js/front-native.js (tools/parity: the same spoken form and
+// pieces as the Python on 104,274 cases, and the same audio byte for byte), with the Python as its fallback; 'py'
+// runs the Python (trnorm) in Pyodide from the start. ?front=js|py overrides it for one visit.
+export const FRONT = 'js';
 
 export const LINKS = {
   github: 'https://github.com/ozguradmin/ahenk-cep-pdfreader',

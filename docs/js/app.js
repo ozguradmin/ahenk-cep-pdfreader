@@ -1187,7 +1187,8 @@ function renderJob() {
   $('stop').disabled = job.state === 'stopping';
   $('resume').hidden = !(job.state === 'stopped' || job.state === 'error') || job.ready >= n;
   if (!track.count) $('listen-now').hidden = true;
-  $('downloads').hidden = !track.count || active;
+  // the last MP3 bytes come a moment after the last segment: no download until they are there
+  $('downloads').hidden = !track.count || active || track.count < track.made;
   $('next-part').hidden = !(job.state === 'done' && job.partNo && job.partNo < job.parts);
   if (!$('next-part').hidden) $('next-part-label').textContent = `Sonraki bölüm (${job.partNo + 1}/${job.parts})`;
   if (track.count && (!active || !$('player').hidden)) {

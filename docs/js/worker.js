@@ -202,9 +202,11 @@ async function openEngine(ort, gpu, threads, buffers, files, manifest, frontP, p
       try {
         return front.prepare(text, speed);
       } catch (e) {
-        if (front.kind === 'js') {
-          // should not happen (parity-tested), but the Python is the reference: let it decide
-          console.warn('Ahenk Okur: the JavaScript front-end failed on a text; asking the Python one.', e);
+        // e.python: the port throws exactly where the Python raises (or would never return), so asking the Python
+        // could only repeat it, or hang. Anything else (an EngineError: this browser's RegExp misreads the text, as
+        // Safari 26.0-26.5 does for a few rare character pairs) goes to the Python, which reads it right.
+        if (front.kind === 'js' && !(e && e.python)) {
+          console.warn('Ahenk Okur: the JavaScript front-end cannot read this text here; asking the Python one.', e);
           try {
             return (await pyFront(pyBase, manifest.vocab)).prepare(text, speed);
           } catch (e2) {
