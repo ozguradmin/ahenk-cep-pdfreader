@@ -6,7 +6,7 @@
 // is new: a document is a list of segments (a sentence or a few), spoken one after the other as one job that reports
 // its progress, sends each segment's audio as soon as it is ready, and can be cancelled between two Euler steps.
 //
-// Messages in:  {type: 'init', modelBase, pyBase, variant, ep, device, maxThreads}
+// Messages in:  {type: 'init', modelBase, pyBase, variant, ep, device, maxThreads, front: 'js' | 'py'}
 //               {type: 'synth', id, segments: [{text, pause}], from, steps, speed, seed}
 //               {type: 'cancel', id}
 // Messages out: {type: 'status', stage, ...} {type: 'alive'} {type: 'ready', info} {type: 'backend', info}
@@ -140,15 +140,16 @@ function pyFront(pyBase, vocab) {
   return pyFrontP;
 }
 
-async function loadFront(pyBase, vocab) {
+async function loadFront(pyBase, vocab, want = 'js') {
   const t0 = performance.now();
   let front;
   try {
+    if (want !== 'js') throw new Error('the Python front-end was asked for');
     const m = await import('./front-native.js');
     m.prepare('Merhaba, 14.10.2026 saat 09:30.', 1, vocab); // builds the regexes now: throws here if this browser cannot
     front = { kind: 'js', prepare: (text, speed) => m.prepare(text, speed, vocab) };
   } catch (e) {
-    console.warn('Ahenk Okur: the JavaScript text front-end cannot run here; using the Python one (Pyodide).', e);
+    if (want === 'js') console.warn('Ahenk Okur: the JavaScript text front-end cannot run here; using the Python one (Pyodide).', e);
     const py = await pyFront(pyBase, vocab);
     front = { kind: 'py', prepare: py.prepare };
   }
@@ -223,7 +224,7 @@ async function openEngine(ort, gpu, threads, buffers, files, manifest, frontP, p
   }
 }
 
-async function init({ modelBase, pyBase, variant, ep, device = {}, maxThreads = 0 }) {
+async function init({ modelBase, pyBase, variant, ep, device = {}, maxThreads = 0, front = 'js' }) {
   const t0 = performance.now();
   post({ type: 'status', stage: 'start' }); // this worker and its imports have loaded
   const cores = self.navigator.hardwareConcurrency || 2;
@@ -237,7 +238,7 @@ async function init({ modelBase, pyBase, variant, ep, device = {}, maxThreads = 
   const files = variantFiles(manifest, variant);
   const total = files.reduce((n, f) => n + f.bytes, 0);
   post({ type: 'status', stage: 'download', loaded: 0, total });
-  const frontP = loadFront(pyBase, manifest.vocab).catch((e) => { throw tag(e, { where: 'front' }); });
+  const frontP = loadFront(pyBase, manifest.vocab, front).catch((e) => { throw tag(e, { where: 'front' }); });
   frontP.catch(() => {}); // awaited in openEngine; if the download fails first, that is the error reported
   const cache = await openCache();
   let loaded = 0;

@@ -1,0 +1,16 @@
+// trnorm/__init__.py in JavaScript: Turkish text normalization for speech, a pure JS port of the Python package
+// (same output for the same input; see py.js for how Python's str, re and int semantics are kept).
+//
+// Public API:
+//     normalize(text)          written Turkish -> spoken form (for TTS front-ends)
+//     normalize_for_frontend   [spoken form, the text ahenk_front's frontend() reads of it] (for front-native.js)
+//     tr_lower / tr_upper      Turkish-aware casing
+//     number_to_words(n)       cardinal number reading (n: a BigInt or a safe integer)
+//     ordinal_to_words(n)      ordinal number reading
+// normalize_for_eval and inverse_normalize (itn.py) are not ported: the reader's front-end does not use them.
+
+export { tr_lower, tr_upper } from './casing.js';
+export { number_to_words, ordinal_to_words } from './numbers.js';
+export { normalize, normalize_for_frontend } from './normalizer.js';
+
+export const __version__ = '0.1.0';

@@ -32,6 +32,11 @@ export const MODELS = {
 
 export const DEFAULT_VARIANT = 'f16';
 
+// The text front-end: 'py' runs the Python (trnorm) in Pyodide; 'js' the JavaScript port in js/front-native.js,
+// with the Python as its fallback. The port is switched on once tools/parity has proven it gives the same output.
+// ?front=js|py overrides it for one visit.
+export const FRONT = 'py';
+
 export const LINKS = {
   github: 'https://github.com/ozguradmin/ahenk-cep-pdfreader',
   engine: 'https://github.com/ozguradmin/ahenk-turkish-tts',
@@ -53,5 +58,6 @@ export function pageOptions(loc) {
       if (u.origin === loc.origin) modelBase = u.href;
     } catch { /* keep the default */ }
   }
-  return { variant, ep, modelBase };
+  const front = ['js', 'py'].includes(q.get('front')) ? q.get('front') : FRONT;
+  return { variant, ep, modelBase, front };
 }
