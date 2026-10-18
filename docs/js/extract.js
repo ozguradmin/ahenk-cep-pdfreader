@@ -67,8 +67,12 @@ export async function extractFile(file, { onProgress = () => {}, askPassword = a
   else if (kind === 'epub') out = await extractEpub(buf, onProgress);
   else if (kind === 'html') out = { blocks: htmlBlocks(parseHtml(decodeText(buf))) };
   else if (kind === 'image') {
-    const { ocrImage } = await import('./ocr.js');
-    out = { blocks: await ocrImage(file, onProgress), ocr: true };
+    const { ocrImage, ocrDone } = await import('./ocr.js');
+    try {
+      out = { blocks: await ocrImage(file, onProgress), ocr: true };
+    } finally {
+      ocrDone(); // the engine holds a few hundred MB; a next image loads it again from the cache
+    }
   } else if (kind === 'md') out = { blocks: plainBlocks(markdownToText(decodeText(buf))) };
   else out = { blocks: plainBlocks(decodeText(buf)) };
   // scanned / suspect: only a PDF's text layer can be missing or broken (js/text.js quality)

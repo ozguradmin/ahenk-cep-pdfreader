@@ -1,12 +1,13 @@
 // The document's audio and its player.
 //
-// Track: the audio of a document, segment by segment, as it arrives from the worker: an Int16 Blob per segment, its
-// length, and waveform peaks (one per 50 ms). Blobs keep the samples out of the JS heap, so a long document does not
-// fill the page's memory; the WAV is the Blobs behind one header.
+// Track: the audio of a document, segment by segment, as it arrives: its length, waveform peaks (one per 50 ms) and
+// its MP3 bytes, encoded on the way by js/mp3.js (about 29 MB an hour). The 48 kHz PCM, 345 MB an hour, is kept too
+// while the audio is short enough for a WAV download (`keepPcm` seconds); past that it is let go. Everything is
+// held in Blobs, outside the JS heap. If the MP3 encoder cannot run, the track falls back to PCM and WAV only.
 //
-// Player: one <audio> element playing a WAV of the segments ready so far. While the document is still being made,
-// it plays what is there; when it reaches the end and more has arrived, it takes the longer WAV and goes on from the
-// same place (when nothing new is there yet it waits, and starts again by itself). Lock-screen controls through the
+// Player: one <audio> element playing the segments ready so far. While the document is still being made, it plays
+// what is there; when it reaches the end and more has arrived, it takes the longer file and goes on from the same
+// place (when nothing new is there yet it waits, and starts again by itself). Lock-screen controls through the
 // Media Session API.
 
 import { wavBlob } from './wav.js';
@@ -14,21 +15,24 @@ import { wavBlob } from './wav.js';
 const PEAK_S = 0.05;
 
 export class Track {
-  constructor(sampleRate) {
+  constructor(sampleRate, { keepPcm = 1800 } = {}) {
     this.sr = sampleRate;
-    this.parts = [];
-    this.samples = [];
+    this.mode = 'mp3'; // 'wav' when the MP3 encoder failed
+    this.keepPcm = keepPcm;
+    this.wavOk = true; // all the PCM is still here
+    this.pcm = [];
+    this.mp3 = [];
+    this.tail = null; // the encoder's last bytes, after the job
     this.offsets = [0];
     this.peaks = [];
-    this.count = 0; // segments ready, from the start
+    this.made = 0; // segments whose samples have arrived
+    this.count = 0; // segments that can be played, from the start
   }
 
-  // segments arrive in order
-  add(index, pcm) {
-    if (index !== this.count) throw new Error(`segment ${index} out of order (have ${this.count})`);
-    this.parts.push(new Blob([pcm]));
-    this.samples.push(pcm.length);
-    this.offsets.push(this.offsets[this.count] + pcm.length);
+  // a segment's samples, in order
+  addPcm(index, pcm) {
+    if (index !== this.made) throw new Error(`segment ${index} out of order (have ${this.made})`);
+    this.offsets.push(this.offsets[this.made] + pcm.length);
     const step = Math.round(this.sr * PEAK_S);
     for (let i = 0; i < pcm.length; i += step) {
       let m = 0;
@@ -39,11 +43,40 @@ export class Track {
       }
       this.peaks.push(m / 32768);
     }
+    this.made += 1;
+    if (this.wavOk && this.offsets[this.made] / this.sr > this.keepPcm && this.mode === 'mp3') {
+      this.wavOk = false;
+      this.pcm = [];
+    }
+    if (this.wavOk) this.pcm.push(new Blob([pcm]));
+    if (this.mode === 'wav') this.count = this.made;
+  }
+
+  // a segment's MP3 bytes, in order
+  addMp3(index, bytes) {
+    if (this.mode !== 'mp3') return;
+    if (index !== this.count) throw new Error(`mp3 ${index} out of order (have ${this.count})`);
+    this.mp3.push(new Blob([bytes]));
     this.count += 1;
   }
 
+  finish(bytes) { if (bytes && bytes.length) this.tail = new Blob([bytes]); }
+
+  // the MP3 encoder failed: PCM from now on, and only what is still kept can play
+  fallBack() {
+    if (this.mode === 'wav') return false;
+    this.mode = 'wav';
+    this.mp3 = [];
+    this.keepPcm = Infinity;
+    if (!this.wavOk) return false; // nothing to fall back on
+    this.count = this.made;
+    return true;
+  }
+
   get duration() { return this.offsets[this.count] / this.sr; }
-  get bytes() { return this.offsets[this.count] * 2; }
+  get madeDuration() { return this.offsets[this.made] / this.sr; }
+  get wavBytes() { return this.offsets[this.made] * 2 + 44; }
+  get mp3Bytes() { return this.mp3.reduce((n, b) => n + b.size, 0); }
   start(i) { return this.offsets[Math.min(i, this.count)] / this.sr; }
 
   // the segment playing at time t (seconds), or -1
@@ -60,7 +93,17 @@ export class Track {
     return lo;
   }
 
-  wav(info) { return wavBlob(this.parts.slice(0, this.count), this.sr, info); }
+  wav(info) { return this.wavOk ? wavBlob(this.pcm.slice(0, this.made), this.sr, info) : null; }
+
+  mp3Blob(head = null) {
+    if (this.mode !== 'mp3') return null;
+    const parts = this.mp3.slice(0, this.count);
+    if (this.tail && this.count === this.made) parts.push(this.tail);
+    return new Blob(head ? [head, ...parts] : parts, { type: 'audio/mpeg' });
+  }
+
+  // what the player plays
+  playable(info) { return this.mode === 'mp3' ? this.mp3Blob() : this.wav(info); }
 }
 
 const fmtTime = (s) => {
@@ -208,7 +251,7 @@ export class Player {
     const tr = this.track;
     if (!tr || !tr.count) return Promise.resolve();
     const old = this.url;
-    this.url = URL.createObjectURL(tr.wav(this.opts.info || {}));
+    this.url = URL.createObjectURL(tr.playable(this.opts.info || {}));
     this.urlCount = tr.count;
     const a = this.audio;
     a.src = this.url;

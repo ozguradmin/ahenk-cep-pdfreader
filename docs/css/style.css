@@ -329,6 +329,10 @@ h1 em { font-style: italic; color: var(--accent); font-weight: 400; letter-spaci
 .range { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 14px; font-weight: 600; }
 .range-label { color: var(--ink-2); margin-right: 2px; }
 .range input { width: 76px; height: 38px; border-radius: 10px; border: 1px solid var(--line-2); background: var(--card-2); padding: 0 10px; text-align: center; font-variant-numeric: tabular-nums; }
+.parts { margin-bottom: 14px; padding: 12px 14px; border-radius: var(--r); background: var(--warn-wash); border: 1px solid var(--warn-line); }
+.parts-row { display: flex; align-items: center; gap: 10px; font-weight: 600; flex-wrap: wrap; }
+.parts select { flex: 1; min-width: 0; max-width: 100%; height: 40px; border-radius: 10px; border: 1px solid var(--line-2); background: var(--card); padding: 0 10px; font-variant-numeric: tabular-nums; }
+.parts .hint { margin: 8px 0 0; }
 .field-label { display: block; font-weight: 700; font-size: .95rem; margin-bottom: 8px; }
 .field-label .hint { font-weight: 500; }
 .editor {
@@ -372,7 +376,8 @@ input[type="range"]::-moz-range-thumb { width: 20px; height: 20px; border-radius
 .gen[data-state="error"] .gen-sub { color: var(--danger); }
 .downloads { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 14px; }
 .dl { display: flex; align-items: center; gap: 14px; text-align: left; padding: 14px 18px; border-radius: 18px; border: 1px solid var(--line); background: var(--card); transition: border-color .2s, transform .15s, box-shadow .2s; }
-.dl:hover { border-color: var(--accent); box-shadow: var(--shadow); }
+.dl:hover:not([disabled]) { border-color: var(--accent); box-shadow: var(--shadow); }
+.dl[disabled] { opacity: .55; cursor: not-allowed; }
 .dl:active { transform: scale(.99); }
 .dl .ic { width: 38px; height: 38px; padding: 9px; border-radius: 12px; background: var(--wash); color: var(--accent); }
 .dl span { display: flex; flex-direction: column; min-width: 0; }
@@ -382,6 +387,9 @@ input[type="range"]::-moz-range-thumb { width: 20px; height: 20px; border-radius
 .reader-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin: 26px 0 10px; flex-wrap: wrap; }
 .reader-title { font-family: var(--serif); font-size: 1.35rem; font-weight: 600; margin: 0; letter-spacing: -.01em; }
 .reader-head .hint { margin: 0; }
+.pager { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 0 0 10px; }
+.pg-num { font-weight: 700; color: var(--ink-2); padding: 0 4px; }
+#pg-here { margin-left: auto; }
 .reader {
   position: relative; max-height: min(64vh, 680px); overflow: auto; overscroll-behavior: contain; padding: clamp(18px, 4vw, 40px) clamp(18px, 5vw, 56px);
   border-radius: 20px; background: var(--card-2); border: 1px solid var(--line);
@@ -464,18 +472,12 @@ input[type="range"]::-moz-range-thumb { width: 20px; height: 20px; border-radius
 .p-menu small { color: var(--muted); }
 .p-menu .hint { margin: 6px 14px 4px; font-size: .75rem; }
 
-/* ---- toast, modal ---- */
+/* ---- toast ---- */
 .toast {
   position: fixed; left: 50%; bottom: calc(var(--player-h) + 24px + env(safe-area-inset-bottom)); transform: translateX(-50%); z-index: 60;
   max-width: min(92vw, 460px); padding: 12px 18px; border-radius: 14px; background: var(--ink); color: var(--paper); font-weight: 600; font-size: .92rem;
   box-shadow: var(--shadow-lg); animation: rise .25s;
 }
-.modal { position: fixed; inset: 0; z-index: 70; display: grid; place-items: center; padding: 20px; background: rgba(15, 12, 8, .45); -webkit-backdrop-filter: blur(4px); backdrop-filter: blur(4px); }
-.modal-card { width: min(420px, 100%); padding: 24px; border-radius: 22px; background: var(--card); border: 1px solid var(--line); box-shadow: var(--shadow-lg); animation: rise .25s; }
-.modal-card h2 { font-family: var(--serif); font-size: 1.4rem; font-weight: 600; margin: 0 0 4px; }
-.modal-card p { margin: 0 0 14px; color: var(--ink-2); }
-.modal-card .btn { margin-top: 16px; }
-
 /* ---- responsive ---- */
 @media (max-width: 900px) {
   .hero { grid-template-columns: 1fr; }

@@ -70,6 +70,7 @@
     <symbol id="i-x" viewBox="0 0 24 24"><path d="M6.5 6.5l11 11m0-11-11 11" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
     <symbol id="i-stop" viewBox="0 0 24 24"><rect x="6.5" y="6.5" width="11" height="11" rx="2" fill="currentColor"/></symbol>
     <symbol id="i-edit" viewBox="0 0 24 24"><path d="M4.5 19.5h4l10-10a2.8 2.8 0 0 0-4-4l-10 10v4ZM13.5 6.5l4 4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-next" viewBox="0 0 24 24"><path d="M5 12h14m0 0-5.5-5.5M19 12l-5.5 5.5" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/></symbol>
     <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
     <symbol id="i-eye" viewBox="0 0 24 24"><path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="1.8"/></symbol>
     <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M12 2.5v2.2M12 19.3v2.2M2.5 12h2.2M19.3 12h2.2M5.3 5.3l1.6 1.6M17.1 17.1l1.6 1.6M5.3 18.7l1.6-1.6M17.1 6.9l1.6-1.6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
@@ -200,6 +201,14 @@
             <span class="hint" id="range-total"></span>
           </div>
 
+          <div class="parts" id="parts" hidden>
+            <div class="parts-row">
+              <label class="range-label" for="part">Bölüm</label>
+              <select id="part"></select>
+            </div>
+            <p class="hint" id="parts-note"></p>
+          </div>
+
           <label class="field-label" for="editor">Okunacak metin <span class="hint">· dilediğiniz gibi düzenleyebilirsiniz; paragrafları boş satırla ayırın</span></label>
           <textarea id="editor" class="editor" spellcheck="false" lang="tr" placeholder="Seslendirmek istediğiniz metni buraya yazın ya da yapıştırın."></textarea>
 
@@ -242,6 +251,7 @@
               <button class="btn btn-primary" id="listen-now" type="button" hidden><svg class="ic" aria-hidden="true"><use href="#i-play"/></svg>Dinlemeye başla</button>
               <button class="btn btn-ghost" id="stop" type="button"><svg class="ic" aria-hidden="true"><use href="#i-stop"/></svg>Durdur</button>
               <button class="btn btn-primary" id="resume" type="button" hidden><svg class="ic" aria-hidden="true"><use href="#i-play"/></svg>Devam et</button>
+              <button class="btn btn-primary" id="next-part" type="button" hidden><span id="next-part-label">Sonraki bölüm</span><svg class="ic" aria-hidden="true"><use href="#i-next"/></svg></button>
             </div>
           </div>
 
@@ -259,6 +269,12 @@
           <div class="reader-head">
             <h2 class="reader-title" id="reader-title">Metin</h2>
             <p class="hint">Bir cümleye dokunun, oradan dinleyin.</p>
+          </div>
+          <div class="pager" id="pager" hidden>
+            <button class="btn btn-ghost btn-sm" id="pg-prev" type="button" aria-label="Önceki sayfa">‹ Önceki</button>
+            <span class="pg-num num" id="pg-num">Sayfa 1 / 1</span>
+            <button class="btn btn-ghost btn-sm" id="pg-next" type="button" aria-label="Sonraki sayfa">Sonraki ›</button>
+            <button class="btn btn-dark btn-sm" id="pg-here" type="button" hidden>Çalan yere git</button>
           </div>
           <article class="reader" id="reader" lang="tr" tabindex="0" aria-label="Seslendirilen metin"></article>
 
@@ -351,15 +367,6 @@
   </div>
 
   <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
-
-  <div class="modal" id="modal" hidden>
-    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="modal-title">
-      <h2 id="modal-title">MP3 hazırlanıyor</h2>
-      <p id="modal-sub" class="num">%0</p>
-      <div class="bar"><i id="modal-fill"></i></div>
-      <button class="btn btn-ghost btn-sm" id="modal-cancel" type="button">Vazgeç</button>
-    </div>
-  </div>
 
   <script type="module" src="js/app.js"></script>
   <script nomodule>

@@ -18,8 +18,13 @@ cihazında üretilir; dosya da metin de hiçbir sunucuya gitmez.
    süresi ve bu cihazda ne kadar süreceği tahmin edilir.
 3. **Ses.** Metin cümle cümle seslendirilir: yüzde, cümle sayısı ve kalan süre canlı görünür. Hazır olan kısım hemen
    dinlenebilir; okunan cümle metinde işaretlenir, bir cümleye dokununca oradan çalar. Durdurulup kaldığı yerden
-   devam ettirilebilir. Bitince **MP3** (64 kbit/s) ya da **WAV** (48 kHz, kayıpsız) indirilir. Dosyalara “yapay
-   zekâ ile üretilmiş ses” notu yazılır.
+   devam ettirilebilir. Ses üretilirken MP3'e (64 kbit/s, saatte ~29 MB) çevrilir, bitince beklemeden **MP3**
+   indirilir; kısa seslerde (bilgisayarda 30, telefonda 10 dakikaya kadar) **WAV** (48 kHz, kayıpsız) da sunulur.
+   Dosyalara “yapay zekâ ile üretilmiş ses” notu yazılır.
+4. **Uzun belgeler.** Çok uzun bir belge bölümlere ayrılır (bilgisayarda bölüm başına en çok ~6, telefonda ~2 saat
+   ses; bölümler mümkünse bir başlıkta başlar). Bölümler sırayla dönüştürülüp ayrı ayrı indirilir. Okuyucu metni
+   sayfa sayfa gösterir (yaklaşık 120 cümle), böylece kitap boyunda bir metinde de sayfa akıcı kalır. OCR bitince OCR
+   motoru ve PDF bellekten bırakılır.
 
 Model sayfa açılır açılmaz kendiliğinden yüklenir (ilk ziyarette ~17 MB, sonra önbellekten); ilerlemesi yüzde olarak
 gösterilir. Telefonlarda ekran üretim boyunca açık tutulur (Wake Lock), kilit ekranından oynatıcı denetlenebilir
@@ -35,8 +40,8 @@ gösterilir. Telefonlarda ekran üretim boyunca açık tutulur (Wake Lock), kili
 | OCR (tesseract.js, yalnızca gerektiğinde yüklenir) | `docs/js/ocr.js` |
 | Model: indirme + sha256 + önbellek, iş parçacıkları, bölüm bölüm sentez, iptal | `docs/js/worker.js` |
 | Ahenk Cep'in örnekleme döngüsü, arka uç seçimi, trnorm ön ucu, torch.randn | `docs/js/engine.js`, `backend.js`, `front.js`, `randn.js`, `docs/py/` |
-| Oynatıcı (üretilirken dinleme, dalga biçimi, kilit ekranı) | `docs/js/player.js` |
-| WAV ve MP3 (lamejs, ayrı worker'da) | `docs/js/wav.js`, `docs/js/mp3.js` |
+| Sesin saklanması (MP3 parçaları, kısa seslerde PCM) ve oynatıcı (üretilirken dinleme, dalga biçimi, kilit ekranı) | `docs/js/player.js` |
+| MP3 (lamejs, ses üretilirken ayrı worker'da), WAV ve ID3 etiketi | `docs/js/mp3.js`, `docs/js/wav.js` |
 | GitHub Pages'te çapraz köken yalıtımı (çok iş parçacıklı WebAssembly için) | `docs/coi-serviceworker.js` |
 
 Motor, [ahenk-turkish-tts](https://github.com/ozguradmin/ahenk-turkish-tts) deposundaki tarayıcı demosundan

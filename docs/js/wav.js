@@ -1,5 +1,6 @@
-// 16-bit mono PCM WAV, scaled like ema_lightning.audio.write_wav, with a RIFF INFO chunk that says the speech is
-// synthetic (ISFT: software, ICMT: comment), so the label travels with the file.
+// Audio files. 16-bit mono PCM WAV, scaled like ema_lightning.audio.write_wav, with a RIFF INFO chunk that says the
+// speech is synthetic (ISFT: software, ICMT: comment), so the label travels with the file; and the ID3 tag that does
+// the same for the MP3 (js/mp3.js makes its frames).
 // Based on ozguradmin/ahenk-turkish-tts site/js/wav.js (Apache-2.0). A long document's audio is kept as many Int16
 // Blobs (one per sentence group); wavBlob() puts a header in front of them without copying the samples into JS.
 
@@ -66,4 +67,44 @@ export function wavHeader(dataBytes, sampleRate, info = {}) {
 export function wavBlob(parts, sampleRate, info = {}) {
   const dataBytes = parts.reduce((n, p) => n + (p.size ?? p.byteLength), 0);
   return new Blob([wavHeader(dataBytes, sampleRate, info), ...parts], { type: 'audio/wav' });
+}
+
+// ID3v2.3 tag for a download: title, artist, album and a comment that says the speech is synthetic.
+export function id3(tags) {
+  const enc16 = (s) => {
+    const out = new Uint8Array(2 + s.length * 2);
+    out[0] = 0xff;
+    out[1] = 0xfe;
+    for (let i = 0; i < s.length; i++) {
+      const c = s.charCodeAt(i);
+      out[2 + i * 2] = c & 0xff;
+      out[3 + i * 2] = c >> 8;
+    }
+    return out;
+  };
+  const frame = (id, body) => {
+    const f = new Uint8Array(10 + body.length);
+    for (let i = 0; i < 4; i++) f[i] = id.charCodeAt(i);
+    new DataView(f.buffer).setUint32(4, body.length);
+    f.set(body, 10);
+    return f;
+  };
+  const text = (id, s) => frame(id, Uint8Array.from([1, ...enc16(s)]));
+  const frames = [];
+  if (tags.title) frames.push(text('TIT2', tags.title));
+  if (tags.artist) frames.push(text('TPE1', tags.artist));
+  if (tags.album) frames.push(text('TALB', tags.album));
+  if (tags.track) frames.push(text('TRCK', tags.track));
+  if (tags.comment) {
+    const body = [1, ...'tur'.split('').map((c) => c.charCodeAt(0)), ...enc16(''), 0, 0, ...enc16(tags.comment)];
+    frames.push(frame('COMM', Uint8Array.from(body)));
+  }
+  const size = frames.reduce((n, f) => n + f.length, 0);
+  const head = new Uint8Array(10);
+  head.set([0x49, 0x44, 0x33, 3, 0, 0]);
+  head[6] = (size >> 21) & 0x7f;
+  head[7] = (size >> 14) & 0x7f;
+  head[8] = (size >> 7) & 0x7f;
+  head[9] = size & 0x7f;
+  return new Blob([head, ...frames]);
 }

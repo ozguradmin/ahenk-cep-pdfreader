@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
-  cleanText, fixTurkish, joinLines, layoutPages, parseEditor, plainBlocks, quality, segment, speakable,
+  cleanText, fixTurkish, joinLines, layoutPages, parseEditor, plainBlocks, quality, segment, speakable, splitParts,
 } from '../docs/js/text.js';
 
 // one pdf.js-like text item per line of a page: [text, x, y, width, size]
@@ -88,4 +88,19 @@ test('long sentences are cut at a comma', () => {
 
 test('links and citation numbers are not read', () => {
   assert.equal(speakable('Bkz. [12] ve [3–5], ayrıca https://ornek.com/a?b=1 adresi.'), 'Bkz. ve, ayrıca adresi.');
+});
+
+test('long documents split into parts between paragraphs, preferably at a heading', () => {
+  const blocks = [];
+  for (let c = 1; c <= 6; c++) {
+    blocks.push({ text: `${c}. Bölüm`, heading: true, page: c * 10 });
+    for (let k = 0; k < 10; k++) blocks.push({ text: 'Bu bir paragraf ve yüz karaktere yakın uzunlukta, sırf bölümleri sınamak için yazılmış bir cümle.', heading: false, page: c * 10 + k });
+  }
+  const parts = splitParts(blocks, 2500);
+  assert.ok(parts.length >= 3);
+  assert.deepEqual(parts.flatMap((p) => p.blocks), blocks, 'nothing lost or reordered');
+  assert.ok(parts.every((p) => p.chars <= 2500 || p.blocks.length === 1));
+  assert.ok(parts.slice(1).every((p) => p.blocks[0].heading), 'parts start at a chapter');
+  assert.equal(parts[0].from, 10);
+  assert.equal(splitParts([{ text: 'Kısa.', heading: false }], 2500).length, 1);
 });

@@ -10,7 +10,8 @@ import { deviceInfo, shortError } from './backend.js';
 import { LINKS, pageOptions } from './config.js';
 import { ExtractError, extractFile } from './extract.js';
 import { Player, Track, fmtTime } from './player.js';
-import { blocksToText, countWords, parseEditor, segment, speechSeconds } from './text.js';
+import { blocksToText, countWords, parseEditor, segment, speechSeconds, splitParts, spokenChars } from './text.js';
+import { id3 } from './wav.js';
 
 const $ = (id) => document.getElementById(id);
 const nf = (x, d = 0) => Number(x).toLocaleString('tr-TR', { minimumFractionDigits: d, maximumFractionDigits: d });
@@ -69,9 +70,12 @@ const state = {
 };
 let job = null;
 let track = null;
-let spans = [];
-let mp3Cache = null;
 let nextId = 1;
+
+// How much one job may hold. A part of a long document is at most PART_S seconds of speech (its MP3 stays in
+// memory: about 29 MB an hour); the WAV is offered while the speech is at most WAV_S seconds (345 MB an hour).
+const PART_S = device.mobile ? 2 * 3600 : 6 * 3600;
+const WAV_S = device.mobile ? 10 * 60 : 30 * 60;
 
 // ---- theme ------------------------------------------------------------------------------------------------------------
 function effectiveTheme() {
@@ -512,9 +516,19 @@ async function openFile(file) {
   }
 }
 
+// pdf.js keeps the whole file (and decoded pages) in its worker: let it go once it is not needed any more.
+function releasePdf(doc) {
+  if (!doc || !doc.pdf) return;
+  const pdf = doc.pdf;
+  doc.pdf = null;
+  Promise.resolve().then(() => pdf.destroy()).catch(() => {});
+}
+
 function openDoc(doc) {
+  if (state.doc && state.doc !== doc && state.doc.pdf !== doc.pdf) releasePdf(state.doc);
   state.doc = doc;
   state.edited = false;
+  state.part = 0;
   const pages = doc.pages || 0;
   const hasPages = pages > 1 && doc.blocks.some((b) => b.page);
   $('range').hidden = !hasPages;
@@ -553,11 +567,40 @@ function rangeBlocks() {
   return doc.blocks.filter((x) => !x.page || (x.page >= a && x.page <= b));
 }
 
+// A document longer than PART_S seconds of speech is made part by part: the editor holds the chosen part.
 function fillEditor() {
-  $('editor').value = blocksToText(rangeBlocks());
+  const parts = splitParts(rangeBlocks(), PART_S * 14);
+  state.parts = parts;
+  state.part = Math.min(state.part || 0, Math.max(0, parts.length - 1));
+  const sel = $('part');
+  $('parts').hidden = parts.length < 2;
+  if (parts.length > 1) {
+    sel.textContent = '';
+    parts.forEach((p, k) => {
+      const o = document.createElement('option');
+      o.value = String(k);
+      const pages = p.from ? (p.from === p.to ? ` · s. ${p.from}` : ` · s. ${p.from}–${p.to}`) : '';
+      o.textContent = `Bölüm ${k + 1}${pages} · ${dur(speechSeconds(p.chars, state.speed), { approx: true })}`;
+      sel.appendChild(o);
+    });
+    sel.value = String(state.part);
+    const all = parts.reduce((n, p) => n + p.chars, 0);
+    $('parts-note').textContent = `Belge uzun (${dur(speechSeconds(all, state.speed), { approx: true })} ses). Bu cihazda bir seferde en çok ${PART_S / 3600} saatlik bir bölüm dönüştürülür; bölümleri sırayla dönüştürüp ayrı ayrı indirebilirsiniz.`;
+  }
+  $('editor').value = blocksToText(parts.length ? parts[state.part].blocks : []);
   state.edited = false;
   updateCounts();
 }
+
+$('part').addEventListener('change', () => {
+  const k = Number($('part').value) || 0;
+  if (state.edited && !window.confirm('Başka bölüme geçmek bu bölümde yaptığınız düzenlemeleri silecek. Devam edilsin mi?')) {
+    $('part').value = String(state.part);
+    return;
+  }
+  state.part = k;
+  fillEditor();
+});
 
 for (const id of ['range-from', 'range-to']) {
   $(id).addEventListener('change', () => {
@@ -567,6 +610,7 @@ for (const id of ['range-from', 'range-to']) {
     $('range-from').value = String(clamp($('range-from').value));
     $('range-to').value = String(Math.max(clamp($('range-from').value), clamp($('range-to').value)));
     if (state.edited && !window.confirm('Sayfa aralığını değiştirmek metinde yaptığınız düzenlemeleri silecek. Devam edilsin mi?')) return;
+    state.part = 0;
     fillEditor();
   });
 }
@@ -581,11 +625,14 @@ $('ocr-btn').addEventListener('click', async () => {
   show(1);
   setExtracting(true, doc.name, 'Görüntüden okuma (OCR) hazırlanıyor…', null);
   try {
-    const { ocrPdf } = await import('./ocr.js');
+    const { ocrPdf, ocrDone } = await import('./ocr.js');
     const blocks = await ocrPdf(doc.pdf, (p) => {
       if (p.stage === 'ocr-load') setExtracting(true, doc.name, `Türkçe OCR indiriliyor… %${Math.round((p.frac || 0) * 100)}`, p.frac || 0);
       else setExtracting(true, doc.name, `Sayfa ${nf(list[Math.min(p.done, list.length - 1)])} görüntüden okunuyor (${nf(p.done + 1)} / ${nf(list.length)})`, p.frac);
     }, list);
+    // the OCR engine (a few hundred MB) and pdf.js with the whole file are not needed any more
+    ocrDone();
+    releasePdf(doc);
     setExtracting(false);
     const kept = doc.blocks.filter((x) => x.page && (x.page < a || x.page > b));
     openDoc({ ...doc, blocks: [...kept, ...blocks].sort((x, y) => (x.page || 0) - (y.page || 0)), scanned: false, suspect: false, ocr: true, pdf: null });
@@ -633,7 +680,8 @@ function updateCounts() {
   const doc = state.doc;
   const parts = [];
   if (doc && doc.pages) parts.push(`${nf(doc.pages)} sayfa`);
-  parts.push(`${nf(words)} kelime`, `${nf(chars)} karakter`);
+  const inPart = state.parts && state.parts.length > 1 ? 'bu bölümde ' : '';
+  parts.push(`${inPart}${nf(words)} kelime`, `${nf(chars)} karakter`);
   if (doc && doc.ocr) parts.push('OCR ile okundu');
   $('doc-stats').textContent = parts.join(' · ');
   state.chars = chars;
@@ -718,7 +766,7 @@ editor.addEventListener('keydown', (e) => {
 });
 
 // ---- the job ---------------------------------------------------------------------------------------------------------------------------
-function startJob() {
+function startJob({ confirmed = false } = {}) {
   const blocks = parseEditor(editor.value);
   const segs = segment(blocks);
   if (!segs.length) {
@@ -733,21 +781,31 @@ function startJob() {
     $('model').scrollIntoView({ block: 'center' });
     return;
   }
-  if (track && track.count && !state.downloaded && job && job.state === 'done'
-    && !window.confirm('Önceki ses henüz indirilmedi. Yeni dönüştürme onun yerini alacak. Devam edilsin mi?')) return;
+  if (!confirmed && !confirmReplace()) return;
   if (job && job.state === 'running') stopJob(true);
 
   // a segment's share of the work: its characters, numbers counted as the words they become
-  const weights = segs.map((s) => s.speak.length + 2.5 * (s.speak.match(/\d/g) || []).length + 4);
+  const weights = segs.map((s) => spokenChars(s.speak) + 4);
   const chars = weights.reduce((a, b) => a + b, 0) - 4 * weights.length;
+  const docName = state.doc ? state.doc.name : 'Metin';
+  const parts = state.parts || [];
+  const partNo = parts.length > 1 ? state.part + 1 : 0;
+  const base = docName.replace(/\.[a-z0-9]{1,5}$/i, '').replace(/[\\/:*?"<>|]+/g, '-').replace(/\s+/g, ' ').trim().slice(0, 80) || 'ahenk-okur';
   job = {
     id: nextId++, segs, blocks, weights, total: weights.reduce((a, b) => a + b, 0), doneW: 0, ready: 0, cur: 0, curFrac: 0,
     steps: state.steps, speed: state.speed, state: 'waiting', retries: 0, runT0: 0, runW0: 0, synthMs: 0, error: '',
-    expected: speechSeconds(chars, state.speed), name: state.doc ? state.doc.name : 'Metin', t0: performance.now(),
+    expected: speechSeconds(chars, state.speed), t0: performance.now(), failed: new Set(), partNo, parts: parts.length,
+    name: partNo ? `${docName} · Bölüm ${partNo}/${parts.length}` : docName,
+    file: partNo ? `${base} - Bölüm ${String(partNo).padStart(2, '0')}` : base,
   };
-  mp3Cache = null;
   state.downloaded = false;
-  track = new Track((state.info && state.info.sampleRate) || 48000);
+  // the PDF itself is not needed while speaking (the text is out): free what pdf.js holds
+  if (state.doc && state.doc.pdf) {
+    releasePdf(state.doc);
+    $('ocr-offer').hidden = true;
+  }
+  track = new Track((state.info && state.info.sampleRate) || 48000, { keepPcm: WAV_S });
+  startEncoder(job.id, track);
   listened = false;
   renderReader(blocks, segs);
   $('reader-title').textContent = job.name;
@@ -760,6 +818,19 @@ function startJob() {
   if (state.ready) sendJob();
   renderJob();
 }
+
+function confirmReplace() {
+  return !(track && track.count && !state.downloaded && job && job.state === 'done')
+    || window.confirm('Önceki ses henüz indirilmedi. Yeni dönüştürme onun yerini alacak. Devam edilsin mi?');
+}
+
+// the next part of a long document, straight from the result
+$('next-part').addEventListener('click', () => {
+  if (!job || !job.partNo || job.partNo >= job.parts || !confirmReplace()) return;
+  state.part = job.partNo;
+  fillEditor();
+  startJob({ confirmed: true });
+});
 
 function sendJob() {
   if (!job || !worker) return;
@@ -776,44 +847,94 @@ function sendJob() {
   renderJob();
 }
 
+// A segment's samples from the speech worker: into the track (peaks, PCM while a WAV is offered), on to the MP3
+// encoder; it becomes playable when its MP3 bytes come back (onPlayable).
 function onSegment(data) {
   const i = data.index;
-  if (i !== track.count) return; // a late message from before a restart
-  track.add(i, data.pcm);
+  if (i !== track.made) return; // a late message from before a restart
+  track.addPcm(i, data.pcm);
+  if (data.failed) job.failed.add(i);
   job.ready = i + 1;
   job.doneW += job.weights[i];
   job.synthMs += data.ms;
   job.curFrac = 0;
   job.retries = 0; // progress again: a later crash gets its own retries
-  const span = spans[i];
-  if (span) {
-    span.classList.remove('p', 'g');
-    if (data.failed) {
-      span.classList.add('x');
-      span.title = 'Bu cümle okunamadı';
-    }
-  }
+  if (track.mode === 'mp3' && encoder) encoder.w.postMessage({ type: 'pcm', index: i, pcm: data.pcm }, [data.pcm.buffer]);
+  else onPlayable();
   // the waveform's scale: the expected length, from how long the speech so far is per unit of text
-  if (job.doneW > 0 && job.ready < job.segs.length) player.expected = Math.max(track.duration, (track.duration / job.doneW) * job.total);
-  if (track.count === 1) {
+  if (job.doneW > 0 && job.ready < job.segs.length) player.expected = Math.max(track.madeDuration, (track.madeDuration / job.doneW) * job.total);
+  if (job.ready >= job.segs.length) finishEncoder();
+  scheduleProgress();
+}
+
+// segments [from, track.count) can be played now
+function onPlayable(from = track.count - 1) {
+  for (let i = Math.max(0, from); i < track.count; i++) markReady(i);
+  const active = job && ['running', 'waiting', 'resuming', 'stopping'].includes(job.state);
+  if (!active && track.count === track.made) player.finished();
+  if (track.count && $('player').hidden) {
     showPlayer(true);
-    $('listen-now').hidden = false;
+    if (player.audio.paused) $('listen-now').hidden = false;
   }
   player.grew();
   scheduleProgress();
+}
+
+// ---- the MP3 encoder (js/mp3.js), one per job ----
+let encoder = null;
+function startEncoder(id, tr) {
+  if (encoder) encoder.w.terminate();
+  encoder = null;
+  let w;
+  try {
+    w = new Worker(new URL('./mp3.js', import.meta.url), { type: 'module' });
+  } catch {
+    encoderFailed(tr);
+    return;
+  }
+  encoder = { w, id, tr };
+  w.onmessage = ({ data }) => {
+    if (!encoder || encoder.w !== w || tr !== track) return;
+    if (data.type === 'chunk') {
+      if (data.index !== tr.count) return;
+      tr.addMp3(data.index, data.bytes);
+      onPlayable();
+    } else if (data.type === 'finished') {
+      tr.finish(data.bytes);
+      w.terminate();
+      if (encoder && encoder.w === w) encoder = null;
+    } else if (data.type === 'error') {
+      console.warn('Ahenk Okur: MP3 encoder', data.message);
+      encoderFailed(tr);
+    }
+  };
+  w.onerror = () => encoderFailed(tr);
+  w.postMessage({ type: 'start', sampleRate: tr.sr, kbps: 64 });
+}
+function finishEncoder() {
+  if (encoder) encoder.w.postMessage({ type: 'finish' });
+}
+// No MP3 (lamejs did not load): play and offer the WAV instead, from what PCM is kept.
+function encoderFailed(tr) {
+  if (encoder) encoder.w.terminate();
+  encoder = null;
+  if (tr !== track) return;
+  const from = tr.count;
+  if (tr.fallBack()) onPlayable(from);
+  else toast('MP3 dönüştürücü yüklenemedi; bu uzunlukta ses saklanamıyor. Sayfayı yenileyip tekrar deneyin.', 7000);
 }
 
 function finishJob(how) {
   if (!job) return;
   job.state = how;
   keepAwake(false);
-  if (how === 'done' && track.duration > 1) {
-    state.measured = { rtf: job.synthMs / 1000 / track.duration, steps: job.steps };
+  if (how === 'done' && track.madeDuration > 1) {
+    state.measured = { rtf: job.synthMs / 1000 / track.madeDuration, steps: job.steps };
     store('ahenk-okur-rtf', JSON.stringify(state.measured));
   }
-  for (const s of spans) s.classList.remove('g');
-  if (how === 'done') player.expected = track.duration;
-  player.finished();
+  markGenerating(-1);
+  if (how === 'done') player.expected = track.madeDuration;
+  if (track.count === track.made) player.finished(); // else when the last MP3 bytes arrive (onPlayable)
   renderJob();
   if (how === 'done' && document.hidden) document.title = '✓ Ses hazır · Ahenk Okur';
 }
@@ -941,11 +1062,11 @@ function renderJob() {
     }
     case 'done':
       title = 'Ses hazır';
-      sub = `${dur(track.duration)} ses · ${dur(job.synthMs / 1000)} sürede üretildi`;
+      sub = `${dur(track.madeDuration)} ses · ${dur(job.synthMs / 1000)} sürede üretildi`;
       break;
     case 'stopped':
       title = 'Durduruldu';
-      sub = `${nf(job.ready)} / ${nf(n)} cümle hazır${track.count ? ` · ${dur(track.duration)} ses` : ''}`;
+      sub = `${nf(job.ready)} / ${nf(n)} cümle hazır${track.made ? ` · ${dur(track.madeDuration)} ses` : ''}`;
       break;
     case 'error':
       title = 'Ses üretimi durdu';
@@ -961,12 +1082,17 @@ function renderJob() {
   $('resume').hidden = !(job.state === 'stopped' || job.state === 'error') || job.ready >= n;
   if (!track.count) $('listen-now').hidden = true;
   $('downloads').hidden = !track.count || active;
-  if (track.count) {
-    const partial = job.state !== 'done';
-    $('dl-wav-size').textContent = `${mb(track.bytes + 44)} · kayıpsız, 48 kHz${partial ? ' · kısmi' : ''}`;
-    $('dl-mp3-size').textContent = `${mb(track.duration * 8000)} · her cihazda çalar${partial ? ' · kısmi' : ''}`;
-    $('pm-wav').textContent = mb(track.bytes + 44);
-    $('pm-mp3').textContent = `≈ ${mb(track.duration * 8000)}`;
+  $('next-part').hidden = !(job.state === 'done' && job.partNo && job.partNo < job.parts);
+  if (!$('next-part').hidden) $('next-part-label').textContent = `Sonraki bölüm (${job.partNo + 1}/${job.parts})`;
+  if (track.count && (!active || !$('player').hidden)) {
+    const partial = job.state !== 'done' ? ' · kısmi' : '';
+    const mp3 = track.mode === 'mp3';
+    $('dl-mp3').disabled = !mp3;
+    $('dl-wav').disabled = !track.wavOk;
+    $('dl-mp3-size').textContent = mp3 ? `${mb(track.mp3Bytes)} · her cihazda çalar${partial}` : 'hazırlanamadı';
+    $('dl-wav-size').textContent = track.wavOk ? `${mb(track.wavBytes)} · kayıpsız, 48 kHz${partial}` : `${WAV_S / 60} dakikadan uzun seslerde yok (çok büyük olurdu)`;
+    $('pm-mp3').textContent = mp3 ? mb(track.mp3Bytes) : '–';
+    $('pm-wav').textContent = track.wavOk ? mb(track.wavBytes) : 'çok uzun';
   }
   document.title = active ? `%${pct} · Ahenk Okur` : job.state === 'done' && document.hidden ? document.title : 'Ahenk Okur — Belgelerinizi Türkçe sesle dinleyin';
 }
@@ -974,37 +1100,123 @@ document.addEventListener('visibilitychange', () => {
   if (!document.hidden && document.title.startsWith('✓')) document.title = 'Ahenk Okur — Belgelerinizi Türkçe sesle dinleyin';
 });
 
-// ---- reader --------------------------------------------------------------------------------------------------------------------------------
+// ---- reader ----------------------------------------------------------------------------------------------------------------------------------
+// The text, one page of about PAGE segments at a time: a whole book in the DOM makes every frame of the page slow
+// (the browser hit-tests and repaints all of it while the progress moves). The page follows the voice; the visitor
+// can leaf through with the pager, and "Çalan yere git" brings them back.
 const reader = $('reader');
+const PAGE = 120;
+let rp = { starts: [0], page: 0, first: 0, last: 0 }; // segment index where each page starts; the page shown
+let spans = []; // the spans of the page shown, segment first..last-1
+let nowIdx = -1;
+let genIdx = -1;
+let browsing = false; // the visitor turned pages: stop following until they come back
 let userScrolled = 0;
-let nowSpan = null;
-let genSpan = null;
 reader.addEventListener('wheel', () => { userScrolled = performance.now(); }, { passive: true });
 reader.addEventListener('touchmove', () => { userScrolled = performance.now(); }, { passive: true });
 
+function paginate(segs) {
+  const starts = [0];
+  let n = 0;
+  for (let i = 1; i < segs.length; i++) {
+    n += 1;
+    // a new page at a paragraph, or inside one that goes on too long
+    if ((n >= PAGE && segs[i].block !== segs[i - 1].block) || n >= PAGE * 1.5) {
+      starts.push(i);
+      n = 0;
+    }
+  }
+  return starts;
+}
+
+const pageOf = (i) => {
+  const st = rp.starts;
+  let lo = 0;
+  let hi = st.length - 1;
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1;
+    if (st[mid] <= i) lo = mid;
+    else hi = mid - 1;
+  }
+  return lo;
+};
+const spanAt = (i) => (i >= rp.first && i < rp.last ? spans[i - rp.first] : null);
+
 function renderReader(blocks, segs) {
-  reader.textContent = '';
+  rp = { starts: paginate(segs), page: -1, first: 0, last: 0 };
+  nowIdx = -1;
+  genIdx = -1;
+  browsing = false;
+  showPage(0);
+}
+
+function showPage(k) {
+  const segs = job ? job.segs : [];
+  k = Math.max(0, Math.min(rp.starts.length - 1, k));
+  rp.page = k;
+  rp.first = rp.starts[k];
+  rp.last = k + 1 < rp.starts.length ? rp.starts[k + 1] : segs.length;
   const frag = document.createDocumentFragment();
   let el = null;
   let last = -1;
-  segs.forEach((s, i) => {
+  spans = [];
+  for (let i = rp.first; i < rp.last; i++) {
+    const s = segs[i];
     if (s.block !== last) {
       el = document.createElement(s.heading ? 'h3' : 'p');
       frag.appendChild(el);
       last = s.block;
     } else el.appendChild(document.createTextNode(' '));
     const span = document.createElement('span');
-    span.className = 's p';
+    let cls = 's';
+    if (!track || i >= track.count) cls += ' p';
+    if (job && job.failed.has(i)) cls += ' x';
+    if (i === genIdx) cls += ' g';
+    if (listened && i === nowIdx) cls += ' now';
+    span.className = cls;
     span.dataset.i = String(i);
     span.textContent = s.text;
     el.appendChild(span);
-  });
+    spans.push(span);
+  }
+  reader.textContent = '';
   reader.appendChild(frag);
-  spans = Array.from(reader.querySelectorAll('.s'));
-  nowSpan = null;
-  genSpan = null;
   reader.scrollTop = 0;
+  const many = rp.starts.length > 1;
+  $('pager').hidden = !many;
+  if (many) {
+    $('pg-num').textContent = `Sayfa ${nf(k + 1)} / ${nf(rp.starts.length)}`;
+    $('pg-prev').disabled = k === 0;
+    $('pg-next').disabled = k === rp.starts.length - 1;
+    syncPager();
+  }
 }
+
+// "Çalan yere git" when the voice (or, before listening, the making) is on another page
+function syncPager() {
+  const target = listened ? nowIdx : genIdx;
+  const hide = !(rp.starts.length > 1 && target >= 0 && pageOf(target) !== rp.page);
+  const label = listened ? 'Çalan yere git' : 'Üretilen yere git';
+  const b = $('pg-here');
+  if (b.hidden !== hide) b.hidden = hide;
+  if (b.textContent !== label) b.textContent = label;
+}
+
+function turn(k) {
+  browsing = true;
+  showPage(k);
+  reader.focus({ preventScroll: true });
+}
+$('pg-prev').addEventListener('click', () => turn(rp.page - 1));
+$('pg-next').addEventListener('click', () => turn(rp.page + 1));
+$('pg-here').addEventListener('click', () => {
+  browsing = false;
+  const target = listened ? nowIdx : genIdx;
+  if (target >= 0) {
+    showPage(pageOf(target));
+    follow(spanAt(target), true);
+  }
+});
 
 reader.addEventListener('click', (e) => {
   const s = e.target.closest('.s');
@@ -1012,45 +1224,61 @@ reader.addEventListener('click', (e) => {
   const i = Number(s.dataset.i);
   if (i < track.count) {
     $('listen-now').hidden = true;
+    browsing = false;
     player.playSegment(i);
   } else toast('Bu cümle henüz hazır değil.');
 });
 
-function follow(span) {
-  if (!span || performance.now() - userScrolled < 6000) return;
+function follow(span, force = false) {
+  if (!span || (!force && performance.now() - userScrolled < 6000)) return;
   const top = span.offsetTop - reader.clientHeight * 0.3;
   const vis = span.offsetTop - reader.scrollTop;
-  if (vis < reader.clientHeight * 0.12 || vis > reader.clientHeight * 0.75) reader.scrollTo({ top: Math.max(0, top), behavior: 'smooth' });
+  if (force || vis < reader.clientHeight * 0.12 || vis > reader.clientHeight * 0.75) reader.scrollTo({ top: Math.max(0, top), behavior: 'smooth' });
+}
+
+// A page change follows what the visitor is attending to: the voice once they listen, the making before that.
+function bringIntoView(i) {
+  if (i < 0 || browsing) return;
+  if (i < rp.first || i >= rp.last) showPage(pageOf(i));
+  follow(spanAt(i));
 }
 
 let listened = false; // the playing sentence is marked once the visitor has started listening
 function highlight(i) {
-  if (!listened) return;
-  const s = spans[i];
-  if (s === nowSpan) return;
-  if (nowSpan) nowSpan.classList.remove('now');
-  nowSpan = s || null;
-  if (nowSpan) {
-    nowSpan.classList.add('now');
-    if (!player.audio.paused) follow(nowSpan);
-  }
+  if (!listened || i === nowIdx) return;
+  const old = spanAt(nowIdx);
+  if (old) old.classList.remove('now');
+  nowIdx = i;
+  const s = spanAt(i);
+  if (s) s.classList.add('now');
+  if (!player.audio.paused) bringIntoView(i);
+  syncPager();
 }
 
 function markGenerating(i) {
-  const s = spans[i];
-  if (s === genSpan) return;
-  if (genSpan) genSpan.classList.remove('g');
-  genSpan = s || null;
-  if (genSpan) {
-    genSpan.classList.add('g');
-    if (player.audio.paused) follow(genSpan);
+  if (i === genIdx) return;
+  const old = spanAt(genIdx);
+  if (old) old.classList.remove('g');
+  genIdx = i;
+  const s = spanAt(i);
+  if (s) s.classList.add('g');
+  if (!listened && player.audio.paused) bringIntoView(i);
+  syncPager();
+}
+
+function markReady(i) {
+  const s = spanAt(i);
+  if (!s) return;
+  s.classList.remove('p', 'g');
+  if (job && job.failed.has(i)) {
+    s.classList.add('x');
+    s.title = 'Bu cümle okunamadı';
   }
 }
 
 // ---- downloads ----------------------------------------------------------------------------------------------------------------------------
 function baseName() {
-  const raw = (job && job.name) || 'ahenk-okur';
-  const base = raw.replace(/\.[a-z0-9]{1,5}$/i, '').replace(/[\\/:*?"<>|]+/g, '-').replace(/\s+/g, ' ').trim().slice(0, 80) || 'ahenk-okur';
+  const base = (job && job.file) || 'ahenk-okur';
   return job && job.state !== 'done' ? `${base} (kısmi)` : base;
 }
 
@@ -1068,52 +1296,29 @@ function save(blob, name) {
 }
 
 function downloadWav() {
-  if (!track || !track.count) return;
-  save(track.wav(WAV_INFO), `${baseName()}.wav`);
-}
-
-let mp3Worker = null;
-function downloadMp3() {
-  if (!track || !track.count) return;
-  if (mp3Cache && mp3Cache.count === track.count) {
-    save(mp3Cache.blob, `${baseName()}.mp3`);
+  if (!track || !track.made) return;
+  const blob = track.wav(WAV_INFO);
+  if (!blob) {
+    toast(`WAV yalnızca ${WAV_S / 60} dakikaya kadar olan seslerde sunulur (bu ses ${mb(track.wavBytes)} olurdu). MP3'ü indirin.`, 6000);
     return;
   }
-  const count = track.count;
-  $('modal').hidden = false;
-  $('modal-title').textContent = 'MP3 hazırlanıyor';
-  $('modal-sub').textContent = '%0';
-  $('modal-fill').style.width = '0%';
-  mp3Worker = new Worker(new URL('./mp3.js', import.meta.url), { type: 'module' });
-  mp3Worker.onmessage = ({ data }) => {
-    if (data.type === 'progress') {
-      $('modal-sub').textContent = `%${Math.floor(data.frac * 100)}`;
-      $('modal-fill').style.width = `${data.frac * 100}%`;
-    } else if (data.type === 'done') {
-      closeMp3();
-      mp3Cache = { count, blob: data.blob };
-      save(data.blob, `${baseName()}.mp3`);
-    } else if (data.type === 'error') {
-      closeMp3();
-      console.error('Ahenk Okur: MP3', data.message);
-      toast('MP3 hazırlanamadı. WAV olarak indirebilirsiniz.', 5000);
-    }
-  };
-  mp3Worker.onerror = () => {
-    closeMp3();
-    toast('MP3 hazırlanamadı. WAV olarak indirebilirsiniz.', 5000);
-  };
-  mp3Worker.postMessage({
-    parts: track.parts.slice(0, count), sampleRate: track.sr, kbps: 64,
-    tags: { title: baseName(), artist: 'Ahenk Okur (yapay ses)', album: 'Ahenk Cep', comment: WAV_INFO.ICMT },
-  });
+  save(blob, `${baseName()}.wav`);
 }
-function closeMp3() {
-  if (mp3Worker) mp3Worker.terminate();
-  mp3Worker = null;
-  $('modal').hidden = true;
+
+// the MP3 is ready as the speech is made: only its tag is added here
+function downloadMp3() {
+  if (!track || !track.count) return;
+  const tags = {
+    title: job ? job.name.replace(/\.[a-z0-9]{1,5}(?= ·|$)/i, '') : 'Ahenk Okur', artist: 'Ahenk Okur (yapay ses)', album: 'Ahenk Cep',
+    track: job && job.partNo ? `${job.partNo}/${job.parts}` : '', comment: WAV_INFO.ICMT,
+  };
+  const blob = track.mp3Blob(id3(tags));
+  if (!blob) {
+    toast('MP3 hazırlanamadı; WAV olarak indirebilirsiniz.', 5000);
+    return;
+  }
+  save(blob, `${baseName()}.mp3`);
 }
-$('modal-cancel').addEventListener('click', closeMp3);
 $('dl-wav').addEventListener('click', downloadWav);
 $('dl-mp3').addEventListener('click', downloadMp3);
 
@@ -1139,10 +1344,7 @@ document.addEventListener('click', (e) => {
   }
 });
 document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape') {
-    menu.hidden = true;
-    if (!$('modal').hidden) closeMp3();
-  }
+  if (e.key === 'Escape') menu.hidden = true;
 });
 
 // ---- back and forth ----------------------------------------------------------------------------------------------------------------------

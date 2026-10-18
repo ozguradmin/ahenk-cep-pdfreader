@@ -357,6 +357,35 @@ export function speakable(text) {
 
 export const countWords = (text) => (text.match(/[\p{L}\d]+(?:['’][\p{L}]+)?/gu) || []).length;
 
+// How much there is to say: characters, with numbers counted as the words they become ("52.000" is "elli iki bin").
+export const spokenChars = (text) => text.length + 2.5 * (text.match(/\d/g) || []).length;
+
+// A long document in parts of at most `max` spoken characters, cut between paragraphs. A heading in the last fifth
+// of a part starts the next one, so parts tend to begin at a chapter. A paragraph longer than a part is one part.
+// -> [{blocks, chars, from, to, title}] (from / to: first and last page, when the blocks know their page)
+export function splitParts(blocks, max) {
+  const parts = [];
+  let cur = [];
+  let size = 0;
+  const close = () => {
+    if (!cur.length) return;
+    const pages = cur.map((b) => b.page).filter(Boolean);
+    const head = cur.find((b) => b.heading);
+    const title = (head ? head.text : cur[0].text).replace(/\s+/g, ' ').slice(0, 60);
+    parts.push({ blocks: cur, chars: size, from: pages[0] || 0, to: pages[pages.length - 1] || 0, title });
+    cur = [];
+    size = 0;
+  };
+  for (const b of blocks) {
+    const n = spokenChars(b.text) + 2;
+    if (cur.length && (size + n > max || (b.heading && size > max * 0.8))) close();
+    cur.push(b);
+    size += n;
+  }
+  close();
+  return parts;
+}
+
 // Seconds of speech for a number of characters of written text, at speed 1: about 14 characters a second with the
 // pauses, from Ahenk Cep's chunker (18 letters a second of speech) and the page's pauses.
 export const CHARS_PER_SECOND = 14;

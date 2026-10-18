@@ -10,7 +10,7 @@ Code included in this repository from other projects
   docs/js/worker.js, docs/py/ (ahenk_front.py and trnorm/), and the loading logic in docs/js/app.js
   ahenk-turkish-tts, Copyright 2026 Özgür Güler, https://github.com/ozguradmin/ahenk-turkish-tts, Apache-2.0.
   Changes: engine.js can be cancelled between Euler steps and awaits its progress callback; wav.js builds a WAV
-  from several Int16 parts; worker.js speaks a document segment by segment. docs/py/ahenk_front.py contains parts of
+  from several Int16 parts and has an ID3 tag writer; worker.js speaks a document segment by segment. docs/py/ahenk_front.py contains parts of
   EMA Lightning 1.1.2 (canberkkkkkk/ema-lightning, Apache-2.0).
 
 - docs/coi-serviceworker.js
