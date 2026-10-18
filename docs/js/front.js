@@ -1,4 +1,4 @@
-// The text front-end in Pyodide: trnorm (src/trnorm, copied to site/py/trnorm) and site/py/ahenk_front.py run as
+// The text front-end in Pyodide: trnorm (src/trnorm, copied to docs/py/trnorm) and docs/py/ahenk_front.py run as
 // the same Python they are in the repo, so the spoken form is the one PyTorch's pipeline sees.
 
 export const PY_FILES = [
@@ -11,7 +11,7 @@ export const PY_FILES = [
   'trnorm/numbers.py',
 ];
 
-// pyodide: a loaded Pyodide; readFile(path) -> Promise<string> (the file under site/py/); vocab: manifest.vocab.
+// pyodide: a loaded Pyodide; readFile(path) -> Promise<string> (the file under docs/py/); vocab: manifest.vocab.
 export async function setupFront(pyodide, readFile, vocab) {
   const root = '/home/pyodide/ahenk';
   pyodide.FS.mkdirTree(`${root}/trnorm`);

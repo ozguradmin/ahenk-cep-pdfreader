@@ -1,9 +1,9 @@
-// The text side of the page (site/js/text.js): PDF layout, plain text, segments. Run: node --test tests/
+// The text side of the page (docs/js/text.js): PDF layout, plain text, segments. Run: node --test tests/
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
   cleanText, fixTurkish, joinLines, layoutPages, parseEditor, plainBlocks, quality, segment, speakable,
-} from '../site/js/text.js';
+} from '../docs/js/text.js';
 
 // one pdf.js-like text item per line of a page: [text, x, y, width, size]
 const page = (lines) => ({ items: lines.map(([str, x, y, w, h = 10]) => ({ str, x, y, w, h, eol: true })) });

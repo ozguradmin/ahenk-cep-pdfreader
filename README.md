@@ -29,25 +29,25 @@ gösterilir. Telefonlarda ekran üretim boyunca açık tutulur (Wake Lock), kili
 
 | Parça | Dosya |
 |---|---|
-| Sayfa, adımlar, ilerleme, indirme | `site/index.html`, `site/css/style.css`, `site/js/app.js` |
-| Belge okuma (pdf.js, DOCX/ODT/EPUB XML'i, metin kodlaması) | `site/js/extract.js` |
-| PDF düzeni, metin temizliği, cümlelere bölme (DOM'suz, Node'da test edilir) | `site/js/text.js` |
-| OCR (tesseract.js, yalnızca gerektiğinde yüklenir) | `site/js/ocr.js` |
-| Model: indirme + sha256 + önbellek, iş parçacıkları, bölüm bölüm sentez, iptal | `site/js/worker.js` |
-| Ahenk Cep'in örnekleme döngüsü, arka uç seçimi, trnorm ön ucu, torch.randn | `site/js/engine.js`, `backend.js`, `front.js`, `randn.js`, `site/py/` |
-| Oynatıcı (üretilirken dinleme, dalga biçimi, kilit ekranı) | `site/js/player.js` |
-| WAV ve MP3 (lamejs, ayrı worker'da) | `site/js/wav.js`, `site/js/mp3.js` |
-| GitHub Pages'te çapraz köken yalıtımı (çok iş parçacıklı WebAssembly için) | `site/coi-serviceworker.js` |
+| Sayfa, adımlar, ilerleme, indirme | `docs/index.html`, `docs/css/style.css`, `docs/js/app.js` |
+| Belge okuma (pdf.js, DOCX/ODT/EPUB XML'i, metin kodlaması) | `docs/js/extract.js` |
+| PDF düzeni, metin temizliği, cümlelere bölme (DOM'suz, Node'da test edilir) | `docs/js/text.js` |
+| OCR (tesseract.js, yalnızca gerektiğinde yüklenir) | `docs/js/ocr.js` |
+| Model: indirme + sha256 + önbellek, iş parçacıkları, bölüm bölüm sentez, iptal | `docs/js/worker.js` |
+| Ahenk Cep'in örnekleme döngüsü, arka uç seçimi, trnorm ön ucu, torch.randn | `docs/js/engine.js`, `backend.js`, `front.js`, `randn.js`, `docs/py/` |
+| Oynatıcı (üretilirken dinleme, dalga biçimi, kilit ekranı) | `docs/js/player.js` |
+| WAV ve MP3 (lamejs, ayrı worker'da) | `docs/js/wav.js`, `docs/js/mp3.js` |
+| GitHub Pages'te çapraz köken yalıtımı (çok iş parçacıklı WebAssembly için) | `docs/coi-serviceworker.js` |
 
 Motor, [ahenk-turkish-tts](https://github.com/ozguradmin/ahenk-turkish-tts) deposundaki tarayıcı demosundan
-alındı (`site/js/engine.js` vb., Apache-2.0); orada PyTorch'la birebir karşılaştırılmıştır. Bu depoda eklenenler:
+alındı (`docs/js/engine.js` vb., Apache-2.0); orada PyTorch'la birebir karşılaştırılmıştır. Bu depoda eklenenler:
 uzun belgeler için bölüm bölüm sentez, iptal ve devam, üretilirken dinleme, belge okuma ve OCR.
 
 Model dosyaları depoda değildir: sayfa onları Hugging Face model deposundan (`onnx/`, f16, sha256 denetimli) indirir
 ve Cache Storage'a koyar. Aynı adresteki (`ozguradmin.github.io`) Ahenk Cep demosu da aynı önbellek adını kullanır;
 birinde inen model ötekinde yeniden inmez. İki site birbirinin ayarına ya da servis çalışanına dokunmaz.
 
-Kütüphaneler jsdelivr'den, sabit sürümle gelir (`site/js/config.js`): onnxruntime-web 1.30.0, Pyodide 0.27.7,
+Kütüphaneler jsdelivr'den, sabit sürümle gelir (`docs/js/config.js`): onnxruntime-web 1.30.0, Pyodide 0.27.7,
 pdf.js 5.7.284 (legacy derleme), fflate 0.8.2, lamejs 1.2.7, tesseract.js 7.0.0.
 
 Adres satırı seçenekleri: `?variant=fp32|f16|int8`, `?ep=wasm|webgpu`.
@@ -62,10 +62,11 @@ npm test                             # metin işleme testleri (node --test)
 
 ## Yayınlama
 
-`.github/workflows/pages.yml`, varsayılan dala yapılan her gönderimde testleri çalıştırıp `site/` klasörünü GitHub
-Pages'e yayınlar. Bir kerelik ayar: **Settings → Pages → Build and deployment → Source: GitHub Actions**.
+Site `docs/` klasöründen GitHub Pages ile, derleme adımı ve GitHub Actions olmadan yayınlanır (`docs/.nojekyll`
+dosyaları olduğu gibi sunar). Bir kerelik ayar: **Settings → Pages → Build and deployment → Source: Deploy from a
+branch → Branch: varsayılan dal, klasör `/docs` → Save**. Sonraki her gönderim kendiliğinden yayına çıkar.
 
-Cloudflare Pages'e de aynı klasör olduğu gibi konabilir (`wrangler pages deploy site --project-name ahenk-okur`);
+Cloudflare Pages'e de aynı klasör olduğu gibi konabilir (`wrangler pages deploy docs --project-name ahenk-okur`);
 ancak bazı Türk internet sağlayıcıları `*.pages.dev` adreslerini engelliyor, bu yüzden ana adres GitHub Pages.
 
 ## Lisans ve atıf

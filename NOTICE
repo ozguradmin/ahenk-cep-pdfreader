@@ -6,18 +6,18 @@ This product's own code is licensed under the Apache License, Version 2.0 (see L
 Code included in this repository from other projects
 -------------------------------------------------------------------------------
 
-- site/js/engine.js, site/js/backend.js, site/js/front.js, site/js/randn.js, site/js/wav.js, the loading half of
-  site/js/worker.js, site/py/ (ahenk_front.py and trnorm/), and the loading logic in site/js/app.js
+- docs/js/engine.js, docs/js/backend.js, docs/js/front.js, docs/js/randn.js, docs/js/wav.js, the loading half of
+  docs/js/worker.js, docs/py/ (ahenk_front.py and trnorm/), and the loading logic in docs/js/app.js
   ahenk-turkish-tts, Copyright 2026 Özgür Güler, https://github.com/ozguradmin/ahenk-turkish-tts, Apache-2.0.
   Changes: engine.js can be cancelled between Euler steps and awaits its progress callback; wav.js builds a WAV
-  from several Int16 parts; worker.js speaks a document segment by segment. site/py/ahenk_front.py contains parts of
+  from several Int16 parts; worker.js speaks a document segment by segment. docs/py/ahenk_front.py contains parts of
   EMA Lightning 1.1.2 (canberkkkkkk/ema-lightning, Apache-2.0).
 
-- site/coi-serviceworker.js
-  coi-serviceworker, Guido Zuidhof and contributors, MIT (see site/coi-serviceworker.LICENSE).
+- docs/coi-serviceworker.js
+  coi-serviceworker, Guido Zuidhof and contributors, MIT (see docs/coi-serviceworker.LICENSE).
 
 -------------------------------------------------------------------------------
-Libraries loaded at run time (not included; from cdn.jsdelivr.net, exact versions in site/js/config.js)
+Libraries loaded at run time (not included; from cdn.jsdelivr.net, exact versions in docs/js/config.js)
 -------------------------------------------------------------------------------
 
 - onnxruntime-web (Microsoft, MIT)

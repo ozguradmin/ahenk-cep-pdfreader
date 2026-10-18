@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Serve site/ on localhost for testing.
+"""Serve docs/ on localhost for testing.
 
     python3 tools/serve.py [--port 8000] [--isolate]
 
-Plain mode is what GitHub Pages gives (no COOP/COEP headers; site/coi-serviceworker.js adds them in browsers that
+Plain mode is what GitHub Pages gives (no COOP/COEP headers; docs/coi-serviceworker.js adds them in browsers that
 allow service workers). --isolate sends Cross-Origin-Opener-Policy and Cross-Origin-Embedder-Policy itself, so
 WebAssembly gets its threads even where service workers are off.
 """
@@ -15,7 +15,7 @@ import functools
 import http.server
 from pathlib import Path
 
-SITE = Path(__file__).resolve().parents[1] / "site"
+SITE = Path(__file__).resolve().parents[1] / "docs"
 
 
 class Handler(http.server.SimpleHTTPRequestHandler):
