@@ -2,8 +2,8 @@
 // Unicode 15.0), loaded the way the site loads it (docs/js/front.js's setupFront). Same output as reference.py.
 //   node tools/parity/pyodide_ref.mjs DIR [--out ref_pyodide.jsonl] [--compare FILE] [--vocab MODEL.json]
 //        [--pyodide DIR] [--max-examples K]
-// DIR/corpus.jsonl -> DIR/<out> ({"id", "spoken", "pieces"} or {"id", "error": "<ExceptionType>"} per case) and
-// DIR/<out>.meta.json. --compare FILE (e.g. reference.py's CPython output) counts the cases whose result differs and
+// DIR/corpus.jsonl -> DIR/<out> ({"id", "spoken", "pieces"} or {"id", "error": "<ExceptionType>"} per case;
+// "NeverReturns" where prepare() would loop forever, see never_returns.py) and DIR/<out>.meta.json. --compare FILE (e.g. reference.py's CPython output) counts the cases whose result differs and
 // writes DIR/<out>.diff.json with examples. Pyodide comes from PYODIDE_DIR (npm i pyodide@0.27.7 outside the repo).
 import { createReadStream, existsSync, readFileSync, renameSync, writeFileSync, createWriteStream } from 'node:fs';
 import { createHash } from 'node:crypto';
@@ -45,6 +45,8 @@ async function start(pyodideDir, vocab) {
   const { loadPyodide } = await import(pathToFileURL(join(pyodideDir, 'pyodide.mjs')).href);
   const pyodide = await loadPyodide({ indexURL: `${pyodideDir}/` });
   const front = await setupFront(pyodide, async (p) => readFileSync(join(PY_DIR, p), 'utf8'), vocab);
+  // never_returns.py: chunk() raises NeverReturns where it would loop forever (a speed under 1/180)
+  pyodide.runPython(`${readFileSync(join(HERE, 'never_returns.py'), 'utf8')}\nimport ahenk_front\nguard(ahenk_front)`);
   const info = 'import sys, unicodedata\n[sys.version.split()[0], unicodedata.unidata_version]';
   const [python, unicode] = pyodide.runPython(info).toJs();
   return { pyodide, front, python, unicode, version: pyodide.version };

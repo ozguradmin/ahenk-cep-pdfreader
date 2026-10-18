@@ -1,7 +1,7 @@
 // Compares docs/js/front-native.js with front_exhaustive.py's per-code-point results.
 //   node --max-old-space-size=8000 tools/parity/front_exhaustive.mjs DIR [--vocab MODEL.json]
-// Prints a JSON summary per test. A difference on a code point that Python's Unicode leaves unassigned is only the
-// engine knowing a newer Unicode (reported, not failed); any other difference exits 1.
+// Prints a JSON summary per test; any difference exits 1, also on a code point that Python's Unicode leaves unassigned
+// (newer_unicode_only: the engine knows it; the port reads it as Python does all the same).
 import { readFileSync } from 'node:fs';
 import { alphabet, blocks, chunk, frontend, piece } from '../../docs/js/front-native.js';
 
@@ -49,9 +49,9 @@ for (const [name, [cps, fn]] of Object.entries(TESTS)) {
     const w = JSON.stringify(want[i]);
     if (g !== w) (unassigned.has(c) ? newer : real).push(`${hex(c)} py=${w.slice(0, 80)} js=${g.slice(0, 80)}`);
   });
-  if (real.length) failed = true;
+  if (real.length || newer.length) failed = true;
   console.log(JSON.stringify({ test: name, code_points: cps.length, differ: real.length, newer_unicode_only: newer.length,
-    examples: real.slice(0, 10) }));
+    examples: [...real, ...newer].slice(0, 10) }));
 }
 const [texts, lowered] = load('sigma');
 const sigma = texts.filter((t, i) => alphabet(t, universal) !== lowered[i]);

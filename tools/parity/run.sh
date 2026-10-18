@@ -3,8 +3,9 @@
 #   bash tools/parity/run.sh DIR [FUZZ_N] [SEED]
 # The reference comes from Pyodide (what the site runs; PYODIDE_DIR, default the scratchpad's node_modules/pyodide),
 # because CPython 3.13 differs from it (Unicode 15.1 vs 15.0). REF=cpython uses reference.py with $PYTHON instead
-# (python3.12 has Pyodide's Unicode and gave the same results, five times faster). MAX_EXAMPLES (default 5) goes to
-# check.mjs. Only check.mjs needs re-running after a change to the JS port. Exit status: check.mjs's.
+# (python3.12 has Pyodide's Unicode and gave the same results, five times faster). FUZZ_ONLY=1 leaves the non-fuzz
+# sources out (corpus.py --fuzz-only: a fuzz corpus without another copy of the base cases). MAX_EXAMPLES (default 5)
+# goes to check.mjs. Only check.mjs needs re-running after a change to the JS port. Exit status: check.mjs's.
 set -euo pipefail
 
 if [[ $# -lt 1 ]]; then
@@ -16,7 +17,7 @@ dir=$1
 fuzz=${2:-0}
 seed=${3:-1}
 
-python3 "$here/corpus.py" --out "$dir" --fuzz "$fuzz" --seed "$seed"
+python3 "$here/corpus.py" --out "$dir" --fuzz "$fuzz" --seed "$seed" ${FUZZ_ONLY:+--fuzz-only}
 case "${REF:-pyodide}" in
   pyodide) node "$here/pyodide_ref.mjs" "$dir" --out ref.jsonl ;;
   cpython) "${PYTHON:-python3}" "$here/reference.py" "$dir" --out ref.jsonl ;;

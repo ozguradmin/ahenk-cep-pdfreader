@@ -61,7 +61,7 @@ def main():
     # lower() looks at context (final sigma): whole strings of cased, case-ignorable and other characters
     rng = random.Random(7)
     pool = ['Σ', 'σ', 'ς', 'Α', 'a', 'A', ' ', '.', "'", '́', '­', ':', '1', 'ǅ', 'İ', 'I', 'ͅ', '’',
-            'ʼ', '‍', 'Ω', '\U0001d400', 'ﬁ', '̇']
+            'ʼ', '‍', 'Ω', '\U0001d400', 'ﬁ', '̇', '\U0001171e', 'ʕ', 'ʰ', 'Ɤ']  # 1171E, ʕ: properties changed after 15.0
     texts = [''.join(rng.choice(pool) for _ in range(rng.randint(1, 12))) for _ in range(50000)]
     with open(f'{a.out}/sigma.json', 'w', encoding='ascii') as f:
         json.dump([texts, [F.alphabet(t, u) for t in texts]], f, ensure_ascii=True)

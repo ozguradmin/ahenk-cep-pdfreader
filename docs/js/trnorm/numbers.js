@@ -7,9 +7,12 @@
 // attach_suffix("altı", "a")      -> "altıya"     (inserts buffer y)
 // harmonize_clitic("lira", "mi")  -> "mı"         (separate question particle / dA)
 //
-// Numbers are BigInts (Python ints are unbounded); number_to_words and ordinal_to_words also take a JS number.
+// Numbers are BigInts (Python ints are unbounded); number_to_words and ordinal_to_words also take a JS number (see
+// _py_number for which Python value it stands for).
 
-import { digit_value, first_cp, int_str, isdecimal, last_cp, lstrip, plen, py_int, split } from './py.js';
+import {
+  digit_value, first_cp, int_str, isdecimal, last_cp, lower, lstrip, plen, py_int, split, type_error,
+} from './py.js';
 
 export const ONES = ['sıfır', 'bir', 'iki', 'üç', 'dört', 'beş', 'altı', 'yedi', 'sekiz', 'dokuz'];
 export const TENS = ['', 'on', 'yirmi', 'otuz', 'kırk', 'elli', 'altmış', 'yetmiş', 'seksen', 'doksan'];
@@ -47,9 +50,64 @@ function _below_thousand(n) {
   return words;
 }
 
+// The Python value an argument of number_to_words stands for: a BigInt or a safe integer is an int, true and false
+// are 1 and 0 (a bool is an int), any other number a float (2 ** 53 + 1 is already 9007199254740992 in JS, 1e21 a
+// float in both). Anything else raises the TypeError Python's n < 0 raises.
+function _py_number(n) {
+  if (typeof n === 'bigint') return n;
+  if (typeof n === 'number') return Number.isSafeInteger(n) ? BigInt(n) : n;
+  if (typeof n === 'boolean') return n ? 1n : 0n;
+  const type = typeof n === 'string' ? 'str' : n == null ? 'NoneType' : Array.isArray(n) ? 'list' : typeof n;
+  throw type_error(`'<' not supported between instances of '${type}' and 'int'`);
+}
+
+// divmod(x, y) of floats, x >= 0 and y > 0, as CPython computes it (_float_div_mod)
+function _float_divmod(x, y) {
+  const mod = x % y; // fmod
+  const div = (x - mod) / y;
+  let floor = 0;
+  if (div) {
+    floor = Math.floor(div);
+    if (div - floor > 0.5) floor += 1;
+  }
+  return [floor, mod];
+}
+
+const _float_index = () => type_error('list indices must be integers or slices, not float');
+
+function _below_thousand_float(n) {
+  const [hundreds, rest] = _float_divmod(n, 100);
+  if (hundreds > 1) throw _float_index(); // ONES[hundreds]
+  const [tens, ones] = _float_divmod(rest, 10);
+  if (tens || ones) throw _float_index(); // TENS[tens], ONES[ones]
+  return hundreds ? ['yüz'] : [];
+}
+
+// number_to_words of a Python float: the same steps on floats, so a float reads only where no list is indexed with
+// one (1e20 -> "yüz kentilyon"), and from 1e21 on (MAX_NUMBER) as the digits of its repr ("1e+21" -> "bir iki bir")
+function _float_words(x) {
+  if (Number.isNaN(x)) throw _float_index(); // every comparison fails, divmod gives nan, TENS[nan]
+  if (x < 0) return `eksi ${_float_words(-x)}`;
+  if (x === 0) return 'sıfır';
+  if (x >= 1e21) return digits_to_words(String(x)); // repr(): the same digits ("1.2345e+22"; inf has none)
+  const words = [];
+  let n = x;
+  for (const [value, name] of SCALES) {
+    let count;
+    [count, n] = _float_divmod(n, Number(value));
+    if (count) {
+      if (!(value === 1000n && count === 1)) words.push(..._below_thousand_float(count));
+      words.push(name);
+    }
+  }
+  if (n) words.push(..._below_thousand_float(n));
+  return words.join(' ');
+}
+
 // Cardinal reading of a non-negative (or negative) integer.
 export function number_to_words(n) {
-  n = BigInt(n);
+  n = _py_number(n);
+  if (typeof n === 'number') return _float_words(n);
   if (n < 0n) return `eksi ${number_to_words(-n)}`;
   if (n === 0n) return 'sıfır';
   if (n > MAX_NUMBER) return digits_to_words(int_str(n));
@@ -106,8 +164,8 @@ const _vowel2 = (back) => (back ? 'a' : 'e');
 // after a locative, -yor, -ken) are kept as written.
 export function harmonize_suffix(stem, suffix) {
   if (!suffix) return suffix;
-  let s = [...suffix.toLowerCase()]; // code points: s[i] is Python's s[i]
-  const stem_l = stem.toLowerCase();
+  let s = [...lower(suffix)]; // code points: s[i] is Python's s[i]
+  const stem_l = lower(stem);
   const stem_last = last_cp(stem_l);
   const stem_ends_vowel = VOWELS.has(stem_last);
 
@@ -207,6 +265,8 @@ export function ordinal_to_words(n) {
   let stem = cardinal;
   const [back, rounded] = _harmony_state(stem);
   const v = _vowel4(back, rounded);
+  // stem[-1]: the float inf reads as '' (its repr has no digits), and Python's index fails there
+  if (!stem) throw Object.assign(new RangeError('string index out of range'), { name: 'IndexError', python: true });
   const suf = VOWELS.has(last_cp(stem)) ? `nc${v}` : `${v}nc${v}`;
   if (VOWELS.has(suf[0]) && stem.endsWith('dört')) stem = `${stem.slice(0, -4)}dörd`;
   return stem + suf;

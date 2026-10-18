@@ -4,7 +4,8 @@
     python3 tools/parity/reference.py DIR [--out ref.jsonl] [--vocab MODEL.json] [--jobs N]
 
 DIR/corpus.jsonl -> DIR/<out>: one line per case, in corpus order: {"id", "spoken", "pieces"} (prepare()'s JSON,
-parsed) or {"id", "error": "<ExceptionType>"} where Python raises. DIR/<out>.meta.json records the interpreter,
+parsed) or {"id", "error": "<ExceptionType>"} where Python raises ("NeverReturns" where prepare() would loop forever:
+never_returns.py). DIR/<out>.meta.json records the interpreter,
 its Unicode version and the vocabulary. The site runs this Python in Pyodide (Python 3.12, Unicode 15.0):
 pyodide_ref.mjs makes the same file there, and run.sh uses that one unless REF=cpython.
 """
@@ -35,8 +36,11 @@ def _init(vocab):
     global _front, _vocab
     sys.dont_write_bytecode = True  # never leave __pycache__ in docs/py
     sys.path.insert(0, os.path.join(REPO, 'docs', 'py'))
+    sys.path.insert(0, HERE)
     import ahenk_front
+    import never_returns
 
+    never_returns.guard(ahenk_front)
     _front, _vocab = ahenk_front, vocab
 
 
@@ -83,7 +87,7 @@ def main(argv=None):
         if a.jobs > 1:
             ctx = multiprocessing.get_context('fork' if sys.platform != 'win32' else 'spawn')
             with ctx.Pool(a.jobs, initializer=_init, initargs=(vocab,)) as pool:
-                results = pool.imap(_run, lines, chunksize=32)
+                results = pool.imap(_run, lines, chunksize=4)  # small chunks: a few cases take seconds each
                 for err, out in results:
                     errors += err
                     fo.write(out + '\n')

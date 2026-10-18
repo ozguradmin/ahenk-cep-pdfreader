@@ -6,10 +6,17 @@
 // is the same object as JSON.parse(ahenk_front.prepare(text, speed, vocab)) for every input, and it throws where
 // the Python raises. Python's meaning is spelled out wherever JavaScript's differs: lengths, indices and slices
 // count code points (not UTF-16 units), whitespace is str.isspace() (what str.split/strip and re's \s use; JS's \s
-// and trim() differ), LETTER is re's Unicode [^\W\d_], and unicodedata.combining is a table taken from Python.
-// Works in browsers (Chrome, Firefox, Safari 16.4+) and Node; no Node APIs.
+// and trim() differ), LETTER is re's Unicode [^\W\d_], lower() is Python's (trnorm/py.js: Unicode 15.0's case data,
+// final sigma), and unicodedata.combining is a table taken from Python. Works in browsers (Chrome, Firefox,
+// Safari 16.4+) and Node; no Node APIs.
+//
+// Every error thrown on purpose carries python: true: the Python raises there too (a ValueError for a number of more
+// than 4300 digits, a TypeError for a bad vocabulary) or never returns (a speed under 1/180, a RuntimeError here), so
+// asking the Python again gives the same error, or hangs. The one other is an EngineError: this browser's RegExp
+// misreads the text (Safari 26.0 to 26.5, trnorm/py.js U_PAIR_BUG), and the Python reads it right.
 
 import { normalize, normalize_for_frontend } from './trnorm/index.js';
+import { lower } from './trnorm/py.js';
 import { UNASSIGNED } from './trnorm/unassigned.js';
 
 export { normalize };
@@ -54,8 +61,9 @@ const slice_end = (i, n) => (i < 0 ? Math.max(0, n + i) : Math.min(i, n));
 
 // A Python exception: an Error named after its type, so a caller can tell which one Python raised.
 function py_error(type, message) {
-  const e = new Error(message);
+  const e = type === 'TypeError' ? new TypeError(message) : new Error(message);
   e.name = type;
+  e.python = true;
   return e;
 }
 
@@ -66,11 +74,12 @@ const FLOAT = /^[+-]?(?:(?:\d(?:_?\d)*)?\.\d(?:_?\d)*|\d(?:_?\d)*\.?)(?:e[+-]?\d
 const FLOAT_WORD = /^([+-]?)(inf|infinity|nan)$/i;
 const ASCII_SPACE = /^[\t\n\v\f\r ]+|[\t\n\v\f\r ]+$/g;
 const ND = /^\p{Nd}$/u;
-let ND_LATER = null; // the code points Unicode 15.0 leaves unassigned: no digit to Python, maybe one to this engine
+// a code point Unicode 15.0 leaves unassigned: no digit, no decomposition, no case to Python; maybe more to this engine
+const NEWER = new RegExp(`[${UNASSIGNED}]`, 'u');
 
 // the ASCII digit of a decimal digit c (\p{Nd}, which Unicode encodes in runs of ten), '' for any other character
 function decimal_digit(c) {
-  if (!ND.test(c) || (ND_LATER ||= new RegExp(`[${UNASSIGNED}]`, 'u')).test(c)) return '';
+  if (!ND.test(c) || NEWER.test(c)) return '';
   let zero = c.codePointAt(0);
   while (ND.test(String.fromCodePoint(zero - 1))) zero--;
   return String((c.codePointAt(0) - zero) % 10);
@@ -107,7 +116,7 @@ function py_float(x) {
     throw py_error('ValueError', `could not convert string to float: ${JSON.stringify(x)}`);
   }
   const type = x === null || x === undefined ? 'NoneType' : typeof x;
-  throw new TypeError(`float() argument must be a string or a real number, not '${type}'`);
+  throw py_error('TypeError', `float() argument must be a string or a real number, not '${type}'`);
 }
 
 // int(x) of a float: truncates; inf and nan raise
@@ -126,12 +135,13 @@ function py_list(vocab) {
     const items = Array.from(vocab);
     for (const ch of items) {
       if (ch !== null && typeof ch === 'object') {
-        throw new TypeError(`unhashable type: '${Array.isArray(ch) ? 'list' : 'dict'}'`);
+        throw py_error('TypeError', `unhashable type: '${Array.isArray(ch) ? 'list' : 'dict'}'`);
       }
     }
     return items;
   }
-  throw new TypeError(`'${vocab === null || vocab === undefined ? 'NoneType' : typeof vocab}' object is not iterable`);
+  const type = vocab === null || vocab === undefined ? 'NoneType' : typeof vocab;
+  throw py_error('TypeError', `'${type}' object is not iterable`);
 }
 
 // ---- ema_lightning/frontend.py ------------------------------------------------------------------------------------
@@ -204,8 +214,10 @@ export function blocks(text) {
 }
 
 // One code point of the lowered text: Turkish letters stay, others lose their accents (NFKD, then every code point
-// of nonzero combining class); a result with anything outside the vocabulary, or nothing left, is a space.
+// of nonzero combining class); a result with anything outside the vocabulary, or nothing left, is a space. A
+// character newer than Unicode 15.0 has no decomposition to Python (this engine may know one) and stays as it is.
 function alphabet_char(ch, vocab) {
+  if (NEWER.test(ch)) return vocab.has(ch) ? ch : ' ';
   if (!TURKISH.has(ch)) ch = ch.normalize('NFKD').replace(COMBINING, '');
   if (!ch) return ' ';
   for (const c of ch) if (!vocab.has(c)) return ' ';
@@ -214,8 +226,7 @@ function alphabet_char(ch, vocab) {
 
 // vocab: a Set of the vocabulary's items (the Python's frozenset)
 export function alphabet(text, vocab) {
-  // toLowerCase is str.lower(): full mappings and the final sigma, locale-free
-  text = text.replace(TYPOGRAPHY_CHARS, (c) => TYPOGRAPHY[c]).replaceAll('İ', 'i').replaceAll('I', 'ı').toLowerCase();
+  text = lower(text.replace(TYPOGRAPHY_CHARS, (c) => TYPOGRAPHY[c]).replaceAll('İ', 'i').replaceAll('I', 'ı'));
   const seen = new Map(); // the same code point always comes out the same; documents repeat few of them
   const out = [];
   for (const ch of text) {
@@ -248,6 +259,9 @@ const CUTS = [
   [new RegExp(`[^${SPACE}](?= )`, 'gu'), CLAUSE_PAUSE], // \S(?= )
 ];
 const LETTER = /[\p{L}\p{Nl}\p{No}]/u; // [^\W\d_]: alphabetic, or numeric but not a decimal digit
+// LETTER.search(piece), a letter of Unicode 15.0 (one newer is none to Python)
+const has_letter = (piece) => LETTER.test(piece)
+  && (!NEWER.test(piece) || [...piece].some((c) => LETTER.test(c) && !NEWER.test(c)));
 
 // m.end() of the last match of pattern.finditer(win) (win has n code points), in code points; -1 if none
 function last_end(pattern, win, n) {
@@ -290,7 +304,7 @@ export function chunk(text, speed) {
     }
     [s, e] = next;
     const piece = cps.slice(a, b).join('');
-    if (LETTER.test(piece)) pieces.push([finish(piece), pause]);
+    if (has_letter(piece)) pieces.push([finish(piece), pause]);
   }
   if (pieces.length) pieces[pieces.length - 1] = [pieces[pieces.length - 1][0], 0.0];
   return pieces;
@@ -337,7 +351,25 @@ export function pieces(spoken, speed, vocab) {
   return out;
 }
 
+// V8 compiles a pattern for one-byte (Latin-1) and for two-byte subjects separately, each when first used, and some
+// paths only when a text reaches them: the first text with ş, ğ or ı (any real Turkish sentence) paid ~50 ms more after
+// the worker's Latin-1 warm-up call. So the first prepare() call also reads this text through every pass, as it is and
+// with its non-Latin-1 characters swapped for Latin-1 ones (both kinds of string).
+const WARM_UP = "Şişli'de 5 TL mi? Iğdır'da 3 kişi, 21 Kasım 2025'te 14.30'da, saat 09:30. Google'da ara: " +
+  'ali.veli@ornek.com.tr, https://www.ornek.gov.tr/a?b=1 ve +90 (212) 555-12-34, TR12 0006 1005 1978 6457 8413 26, ' +
+  "34 ABC 123. XX. Yüzyılda 4'üncü sırada; Dr. I. Smith, GPT-3.5 ile COVID-19, 25°C, 1,5 kg, 10-12 km/s, x² + 10³, " +
+  "IV. Murat, SGK'ye 2 müdür mü? İSTİKLAL CADDESİ 50000 KİŞİYLE DOLDU. No: 12/4, ..., 34728 Kadıköy. 1.2.3 ve 3.x, " +
+  "007, 1990'lardaki 12.345.678,90 ₺, 2023-24 sezonu %15, 3/4 ve 1.250,50 EUR. Bugün hava çok güzel, 25 derece; " +
+  'yarın 3 gün sonra 10.40 metre, 2 bin kişi ve 15 öğrenci geldi.';
+const LATIN1 = { ş: 's', ğ: 'g', ı: 'i', İ: 'I', Ş: 'S', Ğ: 'G', '₺': '$' };
+let warm = false;
+
 export function prepare(text, speed, vocab) {
+  if (!warm) {
+    warm = true;
+    normalize_for_frontend(WARM_UP);
+    normalize_for_frontend(WARM_UP.replace(/[^\0-\xff]/g, (c) => LATIN1[c] ?? ' '));
+  }
   // spoken is normalize(text); pieces read it as the Python string holds it, whose lone surrogates frontend() drops
   // even where a pass brought two together (one astral character in a JS string)
   const [spoken, front_text] = normalize_for_frontend(text);

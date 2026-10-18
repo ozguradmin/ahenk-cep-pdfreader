@@ -7,8 +7,9 @@ DIR/corpus.jsonl: one case per line, {"id", "text", "speed"}. The id names its s
 (test, bench, textbank, fixture, extra, fuzz.<generator>), so check.mjs can tell where mismatches come from.
 Sources: every string of the upstream normalizer tests, the TTS benchmark sets and the VoxCPM text bank, the
 fixture documents (paragraphs, sentences, multi-paragraph windows), tools/parity/extra_cases.txt (one case per
-line, \\n \\t \\uXXXX escapes allowed), and with --fuzz N, N generated cases (seeded, reproducible: the same
-arguments give the same file). Texts are unique; the speed is 1.0 for most cases and 0.8 / 1.3 / 1.4 for ~15%.
+line, \\n \\t \\uXXXX escapes allowed; see extra_case below for "py:" and "speed=" lines), and with --fuzz N, N
+generated cases (seeded, reproducible: the same arguments give the same file). Texts are unique (a text with a speed of
+its own from extra_cases.txt: the pair); the speed is 1.0 for most cases and 0.8 / 1.3 / 1.4 for ~15%.
 """
 
 from __future__ import annotations
@@ -187,8 +188,44 @@ def unescape_line(s):
     return _ESCAPE.sub(rep, s)
 
 
+_PY_EXPR_NODES = (ast.Expression, ast.BinOp, ast.Add, ast.Mult, ast.Constant)
+
+
+def _py_expr(src):
+    """The value of a str expression made of literals, + and * only ('a' + '\\n' * 40000 + 'b'): no names, no calls."""
+    tree = ast.parse(src.strip(), mode='eval')
+    for node in ast.walk(tree):
+        if not isinstance(node, _PY_EXPR_NODES) or (isinstance(node, ast.Constant) and type(node.value) not in (str, int)):
+            raise ValueError(f'extra_cases.txt: not a plain str expression: {src!r}')
+    value = eval(compile(tree, '<extra_cases>', 'eval'), {'__builtins__': {}})
+    if not isinstance(value, str):
+        raise ValueError(f'extra_cases.txt: {src!r} is not a str')
+    return value
+
+
+_SPEED_LINE = re.compile(r'speed=(.*?): ?')
+
+
+def extra_case(line):
+    """(text, speed or None) of one extra_cases.txt line.
+
+    "py: EXPR" is the value of a Python str expression of literals, + and * (for inputs too long to write out:
+    py: '-' * 40000); "speed=JSON: TEXT" gives the case a speed of its own (a JSON number, string or false: what the
+    page could pass to prepare()), TEXT being an ordinary line or a "py:" one; any other line is the text itself, with
+    \\n \\t \\r \\\\ \\xNN \\uXXXX \\UXXXXXXXX escapes.
+    """
+    speed = None
+    m = _SPEED_LINE.match(line)
+    if m:
+        speed = json.loads(m.group(1))
+        line = line[m.end():]
+    if line.startswith('py:'):
+        return _py_expr(line[3:]), speed
+    return unescape_line(line), speed
+
+
 def base_cases():
-    """(id, text) of every non-fuzz source, in a fixed order."""
+    """(id, text, speed or None) of every non-fuzz source, in a fixed order (None: the speed base_speed() gives)."""
     out = []
     for name in ('test_normalizer.py', 'test_web_demo.py'):
         path = os.path.join(UPSTREAM, 'tests', name)
@@ -201,12 +238,13 @@ def base_cases():
         out += [(f'textbank:{os.path.basename(path)[:-6]}:{k}', s) for k, s in jsonl_texts(path)]
     for path in sorted(glob.glob(os.path.join(FIXTURES, '*.html'))):
         out += [(f'fixture:{k}', s) for k, s in fixture_cases(path)]
+    out = [(cid, text, None) for cid, text in out]
     if os.path.exists(EXTRA):
         with open(EXTRA, encoding='utf-8') as f:
             for n, line in enumerate(f, 1):
                 line = line.rstrip('\r\n')
                 if line:
-                    out.append((f'extra:{n}', unescape_line(line)))
+                    out.append((f'extra:{n}', *extra_case(line)))
     return out
 
 
@@ -1274,17 +1312,18 @@ def main(argv=None):
     seen, rows, counts = set(), [], {}
     base = base_cases()
     if not a.fuzz_only:
-        for cid, text in base:
+        for cid, text, speed in base:
             text = canonical(text)
-            if text in seen:
+            key = text if speed is None else (text, json.dumps(speed))
+            if key in seen:
                 continue
-            seen.add(text)
-            rows.append({'id': cid, 'text': text, 'speed': base_speed(cid)})
+            seen.add(key)
+            rows.append({'id': cid, 'text': text, 'speed': base_speed(cid) if speed is None else speed})
             src = cid.split(':')[0]
             counts[src] = counts.get(src, 0) + 1
     if a.fuzz:
-        fz = Fuzz(a.seed, [t for _, t in base])
-        fuzz_seen = {canonical(t) for _, t in base}  # as without --fuzz-only: the fuzz part is the same either way
+        fz = Fuzz(a.seed, [t for _, t, _ in base])
+        fuzz_seen = {canonical(t) for _, t, _ in base}  # as without --fuzz-only: the fuzz part is the same either way
         made, tries = 0, 0
         while made < a.fuzz and tries < a.fuzz * 50:
             tries += 1

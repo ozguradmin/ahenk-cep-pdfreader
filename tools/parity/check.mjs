@@ -5,7 +5,8 @@
 // Compares the spoken form, every piece field (text, pause, ids, cw, wstart), key order, and throw vs raise; a
 // mismatch is filed under the first component that differs (spoken, piece_text, pause, ids, cw, wstart,
 // piece_count, shape, js_threw, js_missing_throw, error_type: both raise, but the JS error's name is not the Python
-// exception's type; unstable with --twice: a second call gave another result).
+// exception's type, or not RuntimeError where the reference says NeverReturns; unstable with --twice: a second call
+// gave another result). A corpus whose ids repeat is refused (exit 2): cases and references are paired by id.
 // Writes DIR/report.json (K examples per category, per-source counts, slowest cases), prints a one-line JSON
 // summary and exits 1 when anything differs (2 when the check itself cannot run).
 import { createReadStream, existsSync, readFileSync, writeFileSync } from 'node:fs';
@@ -62,8 +63,10 @@ function arrayDiff(a, b) {
 function compare(py, js) {
   if ('error' in py) {
     if (!js.threw) return { cat: 'js_missing_throw' };
-    // the port names its errors after the Python type (ValueError, TypeError, OverflowError)
-    return js.error && js.error.name === py.error ? null : { cat: 'error_type' };
+    // the port names its errors after the Python type (ValueError, TypeError, OverflowError); where the Python never
+    // returns (NeverReturns, see never_returns.py) the port throws a RuntimeError by design
+    const want = py.error === 'NeverReturns' ? 'RuntimeError' : py.error;
+    return js.error && js.error.name === want ? null : { cat: 'error_type' };
   }
   if (js.threw) return { cat: 'js_threw' };
   const v = js.value;
@@ -161,9 +164,14 @@ async function main() {
     process.exit(2);
   }
 
+  // references are paired with cases by id: a repeated id would compare against the wrong case
   const corpus = new Map();
   for await (const line of lines(corpusPath)) {
     const c = JSON.parse(line);
+    if (corpus.has(c.id)) {
+      console.log(JSON.stringify({ error: `${corpusPath}: the id ${JSON.stringify(c.id)} appears more than once` }));
+      process.exit(2);
+    }
     corpus.set(c.id, c);
   }
 

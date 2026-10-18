@@ -11,8 +11,11 @@
 // re-agreed the same way: "5 TL mi" -> "beş lira mı".
 //
 // The port keeps Python's names, order and patterns. Patterns are written with py.js's fragments: W/WC for \w, D for
-// \d, S/SC for \s, B for \b, END for $. m[n] is match.group(n) (undefined for None), m.index and end(m) its span in
-// UTF-16 units, so every slice Python sizes in characters goes through cp_back / cp_fwd / plen. Numbers are BigInts.
+// \d, S/SC for \s, B for \b, END for $, lb/nlb for a lookbehind on \w or \d. m[n] is match.group(n) (undefined for
+// None), m.index and end(m) its span in UTF-16 units, so every slice Python sizes in characters goes through cp_back /
+// cp_fwd / plen. Numbers are BigInts. Where a Python pattern takes O(n²) on a long run (the URL and e-mail patterns
+// on "1.1.1...", the alnum lookaheads on "a-a-a...", a postcode search over everything before it), the port gets the
+// same matches without the quadratic part (finditer objects below, each argued at its definition).
 
 import * as L from './lexicon.js';
 import { is_all_caps, tr_capitalize, tr_lower, tr_upper } from './casing.js';
@@ -29,8 +32,9 @@ import {
   read_long_digits,
 } from './numbers.js';
 import {
-  ANY, B, CI_A_Z, D, END, S, SC, W, WC, char_before, ci, cp_back, cp_fwd, end, first_cp, isalnum, isalpha, isdecimal,
-  isdigit, islower, isupper, last_cp, plen, py_int, re, rstrip, split, split1, strip,
+  ANY, B, CI_A_Z, D, END, S, SC, U_PAIR_BUG, U_PAIR_RE, W, WC, char_at, char_before, ci, cp_back, cp_fwd, end, first_cp,
+  has, has_digit, in_table, isalnum, isalpha, isdecimal, isdigit, islower, isupper, last_cp, lb, lower, nlb, plen, py_int,
+  re, rstrip, split, split1, strip, type_error, upper,
 } from './py.js';
 import { UNASSIGNED } from './unassigned.js';
 
@@ -45,7 +49,10 @@ const INT_TH = String.raw`${D}{1,3}(?:\.${D}{3})+`;
 const NUM = `(?:${INT_TH}|${D}+)(?:,${D}+)?`;
 // number in unit/currency context: also accepts dot decimals ("1.5 kg")
 const NUMU = `(?:${INT_TH}(?:,${D}+)?|${D}+[.,]${D}+|${D}+)`;
-const NB = `(?<![${WC}.,])`; // number must not continue a word or another number
+const NB = nlb(`${WC}.,`); // number must not continue a word or another number
+// NB where the number starts with a digit (or a sign): the same, with that first character tested first (faster)
+const NBD = `(?=${D})${NB}`;
+const NBS = `(?=[\\-${D}])${NB}`;
 
 const _ORDINAL_SUFFIX_RE = re.compile(`^(?:[ıiuü]?nc[ıiuü])(${ANY}*)${END}`);
 
@@ -211,7 +218,9 @@ function _context_before(text, pos, width = 32) {
 }
 
 // the text after the last digit (re.split(r"\d", context)[-1]) and its lowercase words
-const _tail_words = (context) => re.findall(`[${LOW}]+`, re.split(D, context).pop());
+const _LOW_WORD_RE = re.compile(`[${LOW}]+`);
+const _DIGIT_RE = re.compile(D);
+const _tail_words = (context) => _LOW_WORD_RE.findall(_DIGIT_RE.split(context).pop());
 
 // True if one of the last `last` words before a number starts with one of `words`.
 // Digits break the window: in "kodunu gir, 21 Kasım 2025", the year is not a code.
@@ -244,11 +253,12 @@ function _has_cue(context, cues, last) {
   return toks.slice(-last).some((t) => _cue_word(t, cues));
 }
 
+const _NEXT_LOW_WORD_RE = re.compile(`[ \\t]*([${LOW}]+)`);
 // A count, not an identifier: "Müşteri sayısı 25000", "Telefonla 15000 kişiye", "Kart limiti 25000 lira".
 function _quantity(context, after) {
   const toks = _tail_words(context);
   if (toks.length && L.QUANTITY_BEFORE.has(toks[toks.length - 1])) return true;
-  const nxt = re.match(`[ \\t]*([${LOW}]+)`, after);
+  const nxt = _NEXT_LOW_WORD_RE.match(after);
   return Boolean(nxt) && _cue_word(nxt[1], L.QUANTITY_AFTER);
 }
 
@@ -259,39 +269,64 @@ const _UNIT_WORDS_RE = [...new Set([...L.UNITS.values(), 'kilo', 'lira', 'dolar'
 
 // --------------------------------------------------------------------------- passes
 
-// emoji, pictographs, flags, skin tones, keycap marks: not read aloud (a raw emoji reaches the TTS model otherwise)
-const _EMOJI_RE = re.compile(
-  String.raw`[\u{1F000}-\u{1FAFF}\u{1FC00}-\u{1FFFD}\u{2600}-\u{27BF}\u{2B00}-\u{2BFF}\u{2300}-\u{23FF}` +
-  String.raw`\u{FE0E}\u{FE0F}\u{20E3}]+`,
+// emoji, pictographs, flags, skin tones, keycap marks: not read aloud (a raw emoji reaches the TTS model otherwise).
+//   [\U0001F000-\U0001FAFF\U0001FC00-\U0001FFFD\u2600-\u27BF\u2B00-\u2BFF\u2300-\u23FF\uFE0E\uFE0F\u20E3]+
+// Written without the u flag, the astral ranges as surrogate pairs (the text has no lone surrogate here): this and
+// _INVISIBLE_RE delete characters, which can bring a pair Safari 26 misreads together, so they run before the check.
+const _EMOJI_RE = new RegExp(
+  String.raw`(?:[\u2600-\u27bf\u2b00-\u2bff\u2300-\u23ff\ufe0e\ufe0f\u20e3]|\ud83c[\udc00-\udfff]` +
+  String.raw`|\ud83d[\udc00-\udfff]|\ud83e[\udc00-\udeff]|\ud83f[\udc00-\udffd])+`, 'g',
 );
+
+// the patterns of _preclean (compiled once; Python's re caches its inline patterns the same way)
+const _INVISIBLE_RE = /[\u200b\u200c\u200d\ufeff]/g;
+const _APOSTROPHE_RE = re.compile(String.raw`(?=[’‘\x60´ʼ′])${lb(WC)}[’‘\x60´ʼ′](?=${W})`, has('’‘`´ʼ′'));
+const _QUOTE_RE = re.compile('[“”„«»]');
+const _SINGLE_QUOTE_RE = re.compile('[’‘]');
+const _DASH_NUM_RE = re.compile(`(?=[${SC}–—])${lb(D)}${S}?[–—]${S}?(?=${D})`, has('–—'));
+const _DASH_RE = re.compile(`${S}[–—]${S}`, has('–—'));
+const _BLANKS_RE = re.compile(String.raw`[ \t]+`);
+
+// An Error for a text this engine cannot read right (py.js U_PAIR_BUG): not a Python exception, so the worker asks
+// the Python front-end, which reads it.
+function _engine_error(text) {
+  const at = text.search(U_PAIR_RE);
+  const pair = [...text.slice(at, at + 2)].map((c) => `U+${c.codePointAt(0).toString(16).toUpperCase()}`).join(' ');
+  const e = new Error(`this browser's RegExp misreads ${pair} (Safari 26.0 to 26.5)`);
+  e.name = 'EngineError';
+  return e;
+}
 
 function _preclean(text) {
   text = text.normalize('NFC').replaceAll(_MARK, '');
-  text = _EMOJI_RE.sub(' ', text);
-  text = re.sub(String.raw`[\u{200b}\u{200c}\u{200d}\u{feff}]`, '', text);
+  text = text.replace(_EMOJI_RE, ' ');
+  text = text.replace(_INVISIBLE_RE, '');
+  // from here on a pass brings such a pair together only by deleting what stands between: _pass_symbols drops "#"
+  // and "@" (checked again there); the rest replace a match whose last character was already next to the following one
+  if (U_PAIR_BUG && U_PAIR_RE.test(text)) throw _engine_error(text);
   text = text.replaceAll('\u{a0}', ' ').replaceAll('\u{202f}', ' ');
   // apostrophes between word characters -> '
-  text = re.sub(String.raw`(?<=${W})[’‘\x60´ʼ′](?=${W})`, "'", text);
-  text = re.sub('[“”„«»]', '"', text);
-  text = re.sub('[’‘]', "'", text);
+  text = _APOSTROPHE_RE.sub("'", text);
+  text = _QUOTE_RE.sub('"', text);
+  text = _SINGLE_QUOTE_RE.sub("'", text);
   text = text.replaceAll('…', '...');
   // en/em dash between numbers -> hyphen (ranges); elsewhere a pause
-  text = re.sub(`(?<=${D})${S}?[–—]${S}?(?=${D})`, '-', text);
-  text = re.sub(`${S}[–—]${S}`, ', ', text);
+  text = _DASH_NUM_RE.sub('-', text);
+  text = _DASH_RE.sub(', ', text);
   text = text.replaceAll('−', '-');
-  text = re.sub(String.raw`[ \t]+`, ' ', text);
+  text = _BLANKS_RE.sub(' ', text);
   return strip(text);
 }
 
 // Written forms of a FOREIGN_NAMES key: as written, ALL CAPS, and unless exact-case also lower/Capitalized.
 // An exact-case key gets no Turkish ALL CAPS form either: "GEMİNİ" is the Turkish word "gemini" in capitals.
 function _name_forms(key) {
-  if (L.FOREIGN_NAMES_EXACT_CASE.has(key)) return new Set([key, key.toUpperCase()]);
-  const low = key.toLowerCase();
+  if (L.FOREIGN_NAMES_EXACT_CASE.has(key)) return new Set([key, upper(key)]);
+  const low = lower(key);
   const head = first_cp(low);
   const tail = low.slice(head.length);
   // ALL CAPS (Latin and Turkish: "INSTAGRAM", "İNSTAGRAM"), youtube, Youtube, İnstagram
-  return new Set([key, key.toUpperCase(), tr_upper(key), low, head.toUpperCase() + tail, tr_upper(head) + tail]);
+  return new Set([key, upper(key), tr_upper(key), low, upper(head) + tail, tr_upper(head) + tail]);
 }
 
 // Among keys of one length the order differs from Python's (a set's order there), which no match depends on: two
@@ -303,10 +338,12 @@ function _build_names() {
   }
   for (const [key, spoken] of L.FOREIGN_NAMES) table.set(key, spoken); // an exact key beats another key's generated form
   const alt = [...table.keys()].sort((a, b) => plen(b) - plen(a)).map(re.escape).join('|');
+  const first = [...new Set([...table.keys()].map(first_cp))].join('').replace(/[\\\]^-]/g, '\\$&');
   // not inside a word, URL, e-mail address or handle ("google.com", "@google", "/google"); an optional
-  // apostrophe suffix ("Google'da"), then a word end
+  // apostrophe suffix ("Google'da"), then a word end ((?=[first]): a first letter of some name, tested first)
   const rx = re.compile(
-    String.raw`(?<![${WC}@./:\\])(?<!${W}')(${alt})(?:'([${LET}]+))?(?![${WC}@+]|'[${LET}]|[./:]${W})`,
+    String.raw`(?=[${first}])${nlb(String.raw`${WC}@./:\\`)}(?<!(?=${W}).')(${alt})(?:'([${LET}]+))?` +
+    String.raw`(?![${WC}@+]|'[${LET}]|[./:]${W})`,
   );
   return [table, rx];
 }
@@ -328,11 +365,98 @@ function _pass_names(text) {
 // re.I: ci() spells each letter the way Python's IGNORECASE matches it
 const _HTTP = `${ci('http')}${ci('s')}?://`;
 const _URL_TLDS = ['com', 'net', 'org', 'gov', 'edu', 'io', 'ai', 'tr', 'co', 'info', 'biz', 'me', 'app', 'dev'];
-const _URL_RE = re.compile(
-  String.raw`${B}(?:${_HTTP})?(?:${ci('www')}\.)?[${WC}\-]+(?:\.[${WC}\-]+)*\.(?:${_URL_TLDS.map(ci).join('|')})` +
-  String.raw`(?:\.[${CI_A_Z}]{2})?(?:/[^${SC}]*)?`,
-);
-const _EMAIL_RE = re.compile(String.raw`${B}[${WC}.+\-]+@[${WC}\-]+(?:\.[${WC}\-]+)+${B}`);
+const _URL_TLD_ALT = _URL_TLDS.map(ci).join('|');
+const _URL_SRC = String.raw`${B}(?:${_HTTP})?(?:${ci('www')}\.)?[${WC}\-]+(?:\.[${WC}\-]+)*\.(?:${_URL_TLD_ALT})` +
+  String.raw`(?:\.[${CI_A_Z}]{2})?(?:/[^${SC}]*)?`;
+const _EMAIL_SRC = String.raw`${B}[${WC}.+\-]+@[${WC}\-]+(?:\.[${WC}\-]+)+${B}`;
+const _LABEL_CHAR = new RegExp(`^[${WC}\\-]$`, 'u'); // [\w-]: a character of a domain label
+const _LOCAL_CHAR = new RegExp(`^[${WC}.+\\-]$`, 'u'); // [\w.+-]: of an e-mail address before the "@"
+
+// The labels joined by single dots ([\w-]+(?:\.[\w-]+)*, as long as it goes) around the dot at q, which has a label
+// character before it and after it: [start, end).
+function _chain(text, q) {
+  let a = q;
+  for (;;) {
+    while (a > 0 && _LABEL_CHAR.test(char_before(text, a))) a = cp_back(text, a, 1);
+    if (a >= 2 && text[a - 1] === '.' && _LABEL_CHAR.test(char_before(text, a - 1))) a--;
+    else break;
+  }
+  let e = q;
+  while (text[e] === '.' && _LABEL_CHAR.test(char_at(text, e + 1))) {
+    e++;
+    while (e < text.length && _LABEL_CHAR.test(char_at(text, e))) e = cp_fwd(text, e, 1);
+  }
+  return [a, e];
+}
+
+// re.compile(URL, re.I).finditer, the same matches without its O(n²) part. The labels before ".com" are
+// [\w-]+(?:\.[\w-]+)*, so Python's search, at every word boundary of a long chain like "1.1.1..." or "a-a-a...", takes
+// in the rest of the chain and gives it back looking for a ".tld". Here the pattern runs only where it can match.
+// A match ends its labels at a "site", a dot with a label character before it and a TLD after it, and starts in the
+// chain of that site (or up to 8 characters before it: "https://"). From a start p the labels take the chain to its
+// end and give back to the last site after p, so p matches if any site of the chain comes after it (and the word
+// boundary holds), and a start that fails because no site is left fails for every later start of the chain too. So
+// for the first site after pos the starts from max(pos, chain start - 8) to the chain's last site are tried in order
+// (the first word boundary before a label matches); if none matches, the chain is done.
+const _URL_RE = {
+  sticky: new RegExp(_URL_SRC, 'uy'),
+  sites: new RegExp(`${lb(`${WC}\\-`)}\\.(?=${_URL_TLD_ALT})`, 'gu'),
+  *finditer(text) {
+    const sites = [];
+    this.sites.lastIndex = 0;
+    for (let m; (m = this.sites.exec(text));) sites.push(m.index);
+    let pos = 0;
+    let k = 0;
+    while (k < sites.length) {
+      if (sites[k] <= pos) { // a match from pos on ends its labels after pos
+        k++;
+        continue;
+      }
+      const [start, stop] = _chain(text, sites[k]);
+      let last = k;
+      while (last + 1 < sites.length && sites[last + 1] < stop) last++;
+      let m = null;
+      for (let p = Math.max(pos, cp_back(text, start, 8)); p < sites[last] && !m; p = cp_fwd(text, p, 1)) {
+        this.sticky.lastIndex = p;
+        m = this.sticky.exec(text);
+      }
+      if (m) {
+        yield m;
+        pos = end(m);
+      } else {
+        k = last + 1;
+      }
+    }
+  },
+};
+
+// _EMAIL_RE.finditer, the same matches without its O(n²) part. The part before "@" is [\w.+-]+, so Python's search
+// takes in a whole run of those characters from each of its word boundaries ("ş+ş+ş+...", "1.1.1...") and fails at
+// the end when no "@" follows. A match starts in the run right before an "@": from any start in it, that part runs to
+// the "@" and the rest of the match does not depend on the start, so only the run's first word boundary (at or after
+// pos) needs trying; if it fails, every start before that "@" does.
+const _EMAIL_RE = {
+  sticky: new RegExp(_EMAIL_SRC, 'uy'),
+  boundary: new RegExp(B, 'gu'),
+  *finditer(text) {
+    let pos = 0;
+    for (let at = text.indexOf('@'); at >= 0; at = text.indexOf('@', at + 1)) {
+      if (at <= pos) continue;
+      let a = at;
+      while (a > pos && _LOCAL_CHAR.test(char_before(text, a))) a = cp_back(text, a, 1);
+      if (a === at) continue;
+      this.boundary.lastIndex = a;
+      const b = this.boundary.exec(text);
+      if (!b || b.index >= at) continue;
+      this.sticky.lastIndex = b.index;
+      const m = this.sticky.exec(text);
+      if (m) {
+        yield m;
+        pos = end(m);
+      }
+    }
+  },
+};
 
 const _TLD = new Map(Object.entries({ com: 'kom', tr: 'te re', net: 'net', org: 'org', gov: 'gov', edu: 'edu', io: 'ay o',
   ai: 'ey ay' }));
@@ -346,8 +470,8 @@ function _read_web_token(tok) {
     else if (piece === '@') parts.push('et');
     else if (piece === '_') parts.push('alt çizgi');
     else if (piece === '-') parts.push('tire');
-    else if (piece.toLowerCase() === 'www') parts.push('ve ve ve');
-    else if (_TLD.has(piece.toLowerCase())) parts.push(_TLD.get(piece.toLowerCase()));
+    else if (lower(piece) === 'www') parts.push('ve ve ve');
+    else if (_TLD.has(lower(piece))) parts.push(_TLD.get(lower(piece)));
     else if (isdecimal(piece)) { // not "²" ("¹".isdigit() is True)
       parts.push(plen(piece) <= 4 ? read_digit_group(piece) : digits_to_words(piece));
     } else parts.push(tr_lower(piece));
@@ -369,12 +493,17 @@ function _pass_web(text) {
 function _build_abbr_re() {
   const keys = [...L.ABBREVIATIONS.keys()].sort((a, b) => plen(b) - plen(a));
   const alt = keys.map(re.escape).join('|');
-  return re.compile(`(?<![${WC}.])(${alt})(?=[${SC},;:!?)"']|${END})`);
+  const first = [...new Set(keys.map(first_cp))].join('');
+  // every key has a "." or a ":" ("Dr.", "No:")
+  return re.compile(`(?=[${first}])${nlb(`${WC}.`)}(${alt})(?=[${SC},;:!?)"']|${END})`, has('.:'));
 }
 
 const _ABBR_RE = _build_abbr_re();
-const _PAGE_RE = re.compile(String.raw`(?<![${WC}.])([sc])\.${S}?(?=${D})`);
+const _PAGE_RE = re.compile(String.raw`(?=[sc])${nlb(`${WC}.`)}([sc])\.${S}?(?=${D})`, has_digit);
+const _NUMBER_LABEL_RE = re.compile(`(?=N)${nlb(`${WC}.`)}(No|Nu|NO)${S}?[:.]${S}?(?=${D})`, has_digit);
+const _LABEL_RE = re.compile(`(?=[KDBTG])${nlb(`${WC}.`)}(Kat|Daire|Blok|D|Tel|GSM)${S}?:${S}?(?=${D})`, has(':'));
 const _LABEL_WORDS = new Map([['D', 'daire'], ['Tel', 'telefon'], ['GSM', 'ge se me']]);
+const _SPACE_CAPITAL_RE = re.compile(`${S}+[${UP}]`);
 
 function _pass_abbreviations(text) {
   const repl = (m) => {
@@ -382,20 +511,18 @@ function _pass_abbreviations(text) {
     let out = L.ABBREVIATIONS.get(key);
     if (L.SENTENCE_FINAL_ABBR.has(key)) {
       const rest = text.slice(end(m));
-      if (!strip(rest) || re.match(`${S}+[${UP}]`, rest)) out += '.';
+      if (!strip(rest) || _SPACE_CAPITAL_RE.match(rest)) out += '.';
     }
     return out;
   };
 
   text = _sub(_ABBR_RE, repl, text);
-  text = re.sub(`(?<![${WC}.])(No|Nu|NO)${S}?[:.]${S}?(?=${D})`, 'numara ', text);
-  text = re.sub(
-    `(?<![${WC}.])(Kat|Daire|Blok|D|Tel|GSM)${S}?:${S}?(?=${D})`, (m) => `${_LABEL_WORDS.get(m[1]) ?? m[1]} `, text,
-  );
+  text = _NUMBER_LABEL_RE.sub('numara ', text);
+  text = _LABEL_RE.sub((m) => `${_LABEL_WORDS.get(m[1]) ?? m[1]} `, text);
   return _PAGE_RE.sub((m) => (m[1] === 's' ? 'sayfa ' : 'cilt '), text);
 }
 
-const _PRODUCT_RE = re.compile(`(?<=${D})[ \\t]?[x×*][ \\t]?(?=[${D}₺$€£])`);
+const _PRODUCT_RE = re.compile(`(?=[ \\tx×*])${lb(D)}[ \\t]?[x×*][ \\t]?(?=[${D}₺$€£])`, has('x×*'));
 
 // x, ×, * between numbers is "çarpı" ("12 x 833,25 TL", "4*5"); runs before the numbers become words.
 function _pass_products(text) {
@@ -410,10 +537,13 @@ function _pass_products(text) {
 }
 
 const _PHONE_RE = re.compile(
-  String.raw`(?<![${WC}+])(\+90[${SC}.\-]?|0[${SC}.\-]?)?\(?([2-58]${D}{2})\)?[${SC}.\-]?(${D}{3})[${SC}.\-]?` +
-  String.raw`(${D}{2})[${SC}.\-]?(${D}{2})${SUF}(?!${W})`,
+  String.raw`(?=[+(${D}])${nlb(`${WC}+`)}(\+90[${SC}.\-]?|0[${SC}.\-]?)?\(?([2-58]${D}{2})\)?[${SC}.\-]?` +
+  String.raw`(${D}{3})[${SC}.\-]?` +
+  String.raw`(${D}{2})[${SC}.\-]?(${D}{2})${SUF}(?!${W})`, has_digit,
 );
-const _PHONE_444_RE = re.compile(String.raw`(?<!${W})(444)[${SC}.\-]?(${D})[${SC}.\-]?(${D}{3})(?!${D})`);
+const _PHONE_444_RE = re.compile(
+  String.raw`(?=4)${nlb(WC)}(444)[${SC}.\-]?(${D})[${SC}.\-]?(${D}{3})(?!${D})`, (t) => t.includes('444'),
+);
 
 function _pass_phones(text) {
   const repl = (m) => {
@@ -436,13 +566,16 @@ function _pass_phones(text) {
   );
 }
 
-const _IBAN_RE = re.compile(String.raw`${B}TR${S}?(${D}{2})((?:${S}?${D}{4}){5})${S}?(${D}{2})${B}`);
+const _IBAN_RE = re.compile(
+  String.raw`(?=T)${B}TR${S}?(${D}{2})((?:${S}?${D}{4}){5})${S}?(${D}{2})${B}`, (t) => t.includes('TR'),
+);
+const _FOUR_DIGITS_RE = re.compile(`${D}{4}`);
 
 function _pass_iban(text) {
   const repl = (m) => {
     // check digits and the last pair as numbers, the four-digit groups digit by digit (easy to write down)
     const groups = [read_digit_group(m[1])];
-    for (const g of re.findall(`${D}{4}`, m[2])) groups.push(digits_to_words(g));
+    for (const g of _FOUR_DIGITS_RE.findall(m[2])) groups.push(digits_to_words(g));
     groups.push(read_digit_group(m[3]));
     return `te re ${groups.join(', ')}`;
   };
@@ -451,7 +584,7 @@ function _pass_iban(text) {
 }
 
 const _PLATE_RE = re.compile(
-  String.raw`(?<!${W})(0[1-9]|[1-7]${D}|8[01])${S}([${UP}]{1,3})${S}(${D}{2,5})${SUF}(?!${W})`,
+  String.raw`(?=[0-8])${nlb(WC)}(0[1-9]|[1-7]${D}|8[01])${S}([${UP}]{1,3})${S}(${D}{2,5})${SUF}(?!${W})`, has_digit,
 );
 
 function _pass_plates(text) {
@@ -477,13 +610,16 @@ function _date_words(d, mo, y) {
 }
 
 const _DATE_RE = re.compile(
-  String.raw`${NB}(${D}{1,2})([./\-])(${D}{1,2})\2(${D}{4}|${D}{2})${SUF}(?!${W}|[.,]${D})`,
+  String.raw`${NBD}(${D}{1,2})([./\-])(${D}{1,2})\2(${D}{4}|${D}{2})${SUF}(?!${W}|[.,]${D})`, has_digit,
 );
-const _MONTH_YEAR_RE = re.compile(String.raw`${NB}(0?[1-9]|1[0-2])[./]((?:19|20)${D}{2})${SUF}(?!${W}|[.,]${D})`);
-const _ISO_DATE_RE = re.compile(String.raw`${NB}(${D}{4})-(${D}{2})-(${D}{2})${SUF}(?!${W}|[.,]${D})`);
+const _MONTH_YEAR_RE = re.compile(
+  String.raw`${NBD}(0?[1-9]|1[0-2])[./]((?:19|20)${D}{2})${SUF}(?!${W}|[.,]${D})`, has_digit,
+);
+const _ISO_DATE_RE = re.compile(String.raw`${NBD}(${D}{4})-(${D}{2})-(${D}{2})${SUF}(?!${W}|[.,]${D})`, has_digit);
 // year first with slashes or dots: 2026/12/31, 2026/1/5, 2026.12.31
 const _YMD_RE = re.compile(
-  String.raw`${NB}((?:1[89]|20)${D}{2})(?:/(${D}{1,2})/(${D}{1,2})|\.(${D}{2})\.(${D}{2}))${SUF}(?!${W}|[.,/]${D})`,
+  String.raw`${NBD}((?:1[89]|20)${D}{2})(?:/(${D}{1,2})/(${D}{1,2})|\.(${D}{2})\.(${D}{2}))${SUF}(?!${W}|[.,/]${D})`,
+  has_digit,
 );
 
 function _pass_dates(text) {
@@ -528,12 +664,17 @@ function _time_words(h, mi, s = null) {
 }
 
 const _TIME_COLON_RE = re.compile(
-  String.raw`${NB}([01]?${D}|2[0-4]):([0-5]${D})(?::([0-5]${D}))?${SUF}(?!${W}|[.,]${D})`,
+  String.raw`${NBD}([01]?${D}|2[0-4]):([0-5]${D})(?::([0-5]${D}))?${SUF}(?!${W}|[.,]${D})`, has_digit,
 );
-const _TIME_DOT_RE = re.compile(String.raw`${NB}([01]?${D}|2[0-4])\.([0-5]${D})${SUF}(?!${W}|[.,]${D})`);
+const _TIME_DOT_RE = re.compile(String.raw`${NBD}([01]?${D}|2[0-4])\.([0-5]${D})${SUF}(?!${W}|[.,]${D})`, has_digit);
 const _TIME_RANGE_RE = re.compile(
-  String.raw`${NB}([01]?${D}|2[0-4])[:.]([0-5]${D})${S}?-${S}?([01]?${D}|2[0-4])[:.]([0-5]${D})${SUF}(?!${W}|[.,]${D})`,
+  String.raw`${NBD}([01]?${D}|2[0-4])[:.]([0-5]${D})${S}?-${S}?([01]?${D}|2[0-4])[:.]([0-5]${D})${SUF}` +
+  String.raw`(?!${W}|[.,]${D})`,
+  has_digit,
 );
+
+const _SIGN_BEFORE_RE = re.compile(`[%‰₺$€£]${S}?${END}`);
+const _TIME_WORD_AFTER_RE = re.compile(`${S}+(?:${L.TIME_CONTEXT.join('|')})`);
 
 function _pass_times(text) {
   text = _sub(
@@ -545,11 +686,11 @@ function _pass_times(text) {
 
   const dot = (m) => {
     const [, h, mi, suf] = m;
-    if (re.search(`[%‰₺$€£]${S}?${END}`, text.slice(cp_back(text, m.index, 2), m.index))) return m[0];
+    if (_SIGN_BEFORE_RE.search(text.slice(cp_back(text, m.index, 2), m.index))) return m[0];
     const before = _context_before(text, m.index);
     const after = tr_lower(text.slice(end(m), cp_fwd(text, end(m), 16)));
     let timey = Boolean(suf) || _has_word(before, L.TIME_CONTEXT) || mi === '00' || mi === '30';
-    timey = timey || Boolean(re.match(`${S}+(?:${L.TIME_CONTEXT.join('|')})`, after));
+    timey = timey || Boolean(_TIME_WORD_AFTER_RE.match(after));
     if (!timey) return m[0];
     return _suffix(_time_words(h, mi), suf);
   };
@@ -559,15 +700,23 @@ function _pass_times(text) {
 
 const _CUR_SYMBOLS = String.raw`₺|\$|€|£|¥|₽`;
 const _CUR_CODES = 'TL|TRY|USD|EUR|GBP|JPY|RUB|CHF';
-const _CUR_PREFIX_RE = re.compile(`(?<!${W})(${_CUR_SYMBOLS})${S}?(${NUMU})${SUF}(?!${W}|[.,]${D})`);
-const _CUR_POSTFIX_RE = re.compile(
-  `${NB}(${NUMU})(?:${S}?-${S}?(${NUMU}))?${S}?(${_CUR_SYMBOLS}|(?:${_CUR_CODES})(?!${W}))${SUF}(?!${W}|[.,]${D})`,
+const _CUR_PREFIX_RE = re.compile(
+  `(?=[₺$€£¥₽])${nlb(WC)}(${_CUR_SYMBOLS})${S}?(${NUMU})${SUF}(?!${W}|[.,]${D})`, has('₺$€£¥₽'),
 );
-const _SCALE_CUR_RE = re.compile(`${B}(bin|milyon|milyar|trilyon)${S}(${_CUR_SYMBOLS}|${_CUR_CODES})(?!${W})${SUF}`);
+const _CUR_POSTFIX_RE = re.compile(
+  `${NBD}(${NUMU})(?:${S}?-${S}?(${NUMU}))?${S}?(${_CUR_SYMBOLS}|(?:${_CUR_CODES})(?!${W}))${SUF}(?!${W}|[.,]${D})`,
+  has_digit,
+);
+const _SCALE_WORDS = /bin|milyon|milyar|trilyon/;
+const _SCALE_CUR_RE = re.compile(
+  `(?=[bmt])${B}(bin|milyon|milyar|trilyon)${S}(${_CUR_SYMBOLS}|${_CUR_CODES})(?!${W})${SUF}`,
+  (t) => _SCALE_WORDS.test(t),
+);
+const _AMOUNT_RE = re.compile(`(${INT_TH}|${D}+)[.,](${D}{2})`);
 
 function _money_words(amount, cur_word) {
   const sub = L.CURRENCY_SUBUNIT.get(cur_word);
-  const m = re.fullmatch(`(${INT_TH}|${D}+)[.,](${D}{2})`, amount);
+  const m = _AMOUNT_RE.fullmatch(amount);
   if (sub && m && !re.fullmatch(INT_TH, amount)) {
     const major = number_to_words(py_int(m[1].replaceAll('.', '')));
     const minor = int(m[2]);
@@ -595,9 +744,9 @@ function _pass_money(text) {
 }
 
 const _PCT_PREFIX_RE = re.compile(
-  `(?<!${W})([%‰])${S}?(${NUMU})(?:${S}?-${S}?%?${S}?(${NUMU}))?${SUF}(?!${W}|[.,]${D})`,
+  `(?=[%‰])${nlb(WC)}([%‰])${S}?(${NUMU})(?:${S}?-${S}?%?${S}?(${NUMU}))?${SUF}(?!${W}|[.,]${D})`, has('%‰'),
 );
-const _PCT_POSTFIX_RE = re.compile(`${NB}(${NUMU})${S}?%${SUF}(?!${W})`);
+const _PCT_POSTFIX_RE = re.compile(`${NBD}(${NUMU})${S}?%${SUF}(?!${W})`, has('%'));
 
 function _pass_percent(text) {
   const pre = (m) => {
@@ -611,7 +760,7 @@ function _pass_percent(text) {
   return _sub(_PCT_POSTFIX_RE, (m) => _suffix(`yüzde ${read_number(m[1], 'virgül')}`, m[2]), text);
 }
 
-const _DEG_RE = re.compile(`(?<![${WC}.,])(-?${NUMU})${S}?°${S}?([CF])?(?![${LET}])${SUF}`);
+const _DEG_RE = re.compile(`${NBS}(-?${NUMU})${S}?°${S}?([CF])?(?![${LET}])${SUF}`, has('°'));
 
 function _pass_degrees(text) {
   const repl = (m) => {
@@ -628,13 +777,13 @@ const _by_length = (keys) => [...keys].sort((a, b) => plen(b) - plen(a)); // sor
 
 function _build_unit_re() {
   const alt = _by_length(L.UNITS.keys()).map(re.escape).join('|');
-  return re.compile(`${NB}(-?${NUMU})(?:${S}?-${S}?(${NUMU}))?${S}?(${alt})(?![${WC}²³/])${SUF}`);
+  return re.compile(`${NBS}(-?${NUMU})(?:${S}?-${S}?(${NUMU}))?${S}?(${alt})(?![${WC}²³/])${SUF}`, has_digit);
 }
 
 const _UNIT_RE = _build_unit_re();
 const _SPEED_RE = re.compile(
-  `${NB}(${NUMU})(?:${S}?-${S}?(${NUMU}))?${S}?(${_by_length(L.SPEED_UNITS.keys()).map(re.escape).join('|')})` +
-  `(?!${W})${SUF}`,
+  `${NBD}(${NUMU})(?:${S}?-${S}?(${NUMU}))?${S}?(${_by_length(L.SPEED_UNITS.keys()).map(re.escape).join('|')})` +
+  `(?!${W})${SUF}`, has_digit,
 );
 
 function _pass_units(text) {
@@ -657,14 +806,52 @@ function _pass_units(text) {
 
 // tokens mixing letters and digits: TR42648163, A4, 5G, MP3, H2O, COVID-19, F-16
 // ...with a decimal version at the end: GPT-3.5
-const _ALNUM_RE = re.compile(
-  `(?<![${WC}'])(?=[${LET}${D}\\-]*${D})(?=[${LET}${D}\\-]*[${UP}])([${LET}${D}]+(?:-[${LET}${D}]+)*` +
-  `(?:(?<=${D})[.,]${D}+)?)${SUF}(?!${W}|[.,]${D})`,
-);
+//   (?<![\w'])(?=[LET\d-]*\d)(?=[LET\d-]*[UP])([LET\d]+(?:-[LET\d]+)*(?:(?<=\d)[.,]\d+)?)SUF(?![\w]|[.,]\d)
+// The two lookaheads scan the run of [LET\d-] from each start: on a long run without a digit or a capital ("a-a-a...",
+// "-----") Python tries every position of it, O(n²). finditer runs the pattern without them and tests them on what it
+// matches: they hold for the same run from a later start only if they hold from this one (its rest of the run is
+// shorter), so when they fail, no match starts before the run's end. A text without "-" has only one start per run
+// (the others follow a letter or digit), so there the pattern as Python writes it is linear and runs as it is.
+const _ALNUM_SRC = `${nlb(`${WC}'`)}(?=[${LET}${D}\\-]*${D})(?=[${LET}${D}\\-]*[${UP}])` +
+  `([${LET}${D}]+(?:-[${LET}${D}]+)*(?:${lb(D)}[.,]${D}+)?)${SUF}(?!${W}|[.,]${D})`;
+const _HAS_CAPITAL = new RegExp(`[${UP}]`);
+const _ALNUM_RE = {
+  plain: re.compile(`(?=[${LET}${D}])${_ALNUM_SRC}`),
+  rx: new RegExp(
+    `(?=[${LET}${D}])${nlb(`${WC}'`)}([${LET}${D}]+(?:-[${LET}${D}]+)*(?:${lb(D)}[.,]${D}+)?)${SUF}` +
+    `(?!${W}|[.,]${D})`, 'gu',
+  ),
+  digit: new RegExp(`[${LET}${D}\\-]*${D}`, 'uy'),
+  capital: new RegExp(`[${LET}${D}\\-]*[${UP}]`, 'uy'),
+  run: new RegExp(`[${LET}${D}\\-]*`, 'uy'),
+  *finditer(text) {
+    if (!has_digit(text) || !_HAS_CAPITAL.test(text)) return; // every match has both
+    if (!text.includes('-')) {
+      yield* this.plain.finditer(text);
+      return;
+    }
+    let pos = 0;
+    for (;;) {
+      this.rx.lastIndex = pos;
+      const m = this.rx.exec(text);
+      if (!m) return;
+      this.digit.lastIndex = this.capital.lastIndex = this.run.lastIndex = m.index;
+      if (this.digit.test(text) && this.capital.test(text)) {
+        yield m;
+        pos = end(m);
+      } else {
+        this.run.exec(text);
+        pos = this.run.lastIndex;
+      }
+    }
+  },
+};
+
+const _ALNUM_PIECE_RE = re.compile(`[${LET}]+|${D}+(?:[.,]${D}+)?`);
 
 function _read_alnum(tok) {
   const out = [];
-  for (const piece of re.findall(`[${LET}]+|${D}+(?:[.,]${D}+)?`, tok)) {
+  for (const piece of _ALNUM_PIECE_RE.findall(tok)) {
     if (!isdigit(piece) && isdigit(first_cp(piece))) out.push(read_number(piece)); // GPT-3.5
     else if (isdigit(piece)) out.push(plen(piece) >= 5 ? digits_to_words(piece) : read_digit_group(piece));
     else if (L.ACRONYMS.has(piece)) out.push(L.ACRONYMS.get(piece));
@@ -683,8 +870,11 @@ function _pass_alnum(text) {
 
 // either end may be negative: "-10 - 5 derece", "-5 - -2 gün" (a sign only after a space or the start)
 const _RANGE_RE = re.compile(
-  `(?:(?<![${WC}.,\\-])(-)|${NB})(${NUM})${S}?-${S}?(-?)(${NUM})${SUF}(?!${W}|[.,]${D})`,
+  `(?=[\\-${D}])(?:${nlb(`${WC}.,\\-`)}(-)|${NB})(${NUM})${S}?-${S}?(-?)(${NUM})${SUF}(?!${W}|[.,]${D})`,
+  (t) => t.includes('-') && has_digit(t),
 );
+
+const _SCORE_AFTER_RE = re.compile(`${S}*(?:${L.SCORE_CONTEXT.join('|')})`);
 
 function _pass_ranges(text) {
   const repl = (m) => {
@@ -703,7 +893,7 @@ function _pass_ranges(text) {
     };
 
     const descending = av !== null && bv !== null && bv <= av; // ranges go up; "3-1", "6-6", "2023-24" don't
-    if (descending || _has_word(before, L.SCORE_CONTEXT) || re.match(`${S}*(?:${L.SCORE_CONTEXT.join('|')})`, after)) {
+    if (descending || _has_word(before, L.SCORE_CONTEXT) || _SCORE_AFTER_RE.match(after)) {
       return `${first} ${last(bv)}`;
     }
     return `${first} ${_ila(text, end(m))} ${last(_int_value(b))}`;
@@ -713,14 +903,19 @@ function _pass_ranges(text) {
 }
 
 // N/M is a building / apartment number: after "No", "numara", "kapı", "daire"... or before "nolu".
+const _LET_WORD_RE = re.compile(`[${LET}]+`);
+const _NOLU_RE = re.compile(`${S}*(?:nolu|no'lu|numaralı)${B}`);
 function _address_number(text, start, end_) {
-  const words = re.findall(`[${LET}]+`, _context_before(text, start, 24));
+  const words = _LET_WORD_RE.findall(_context_before(text, start, 24));
   if (words.length && L.ADDRESS_NUMBER_CONTEXT.has(words[words.length - 1])) return true;
-  return re.match(`${S}*(?:nolu|no'lu|numaralı)${B}`, tr_lower(text.slice(end_, cp_fwd(text, end_, 16)))) !== null;
+  return _NOLU_RE.match(tr_lower(text.slice(end_, cp_fwd(text, end_, 16)))) !== null;
 }
 
-const _FRACTION_RE = re.compile(`(?<![${WC}./,])(${D}{1,3})/(${D}{1,3})${SUF}(?![${WC}/]|[.,]${D})`);
-const _RATIO_RE = re.compile(`${NB}(${D}+,${D}+)/(${D}{1,3})${SUF}(?![${WC}/]|[.,]${D})`);
+const _has_slash = (t) => t.includes('/');
+const _FRACTION_RE = re.compile(
+  `(?=${D})${nlb(`${WC}./,`)}(${D}{1,3})/(${D}{1,3})${SUF}(?![${WC}/]|[.,]${D})`, _has_slash,
+);
+const _RATIO_RE = re.compile(`${NBD}(${D}+,${D}+)/(${D}{1,3})${SUF}(?![${WC}/]|[.,]${D})`, _has_slash);
 
 function _pass_fractions(text) {
   const repl = (m) => {
@@ -744,7 +939,7 @@ function _pass_fractions(text) {
 }
 
 const _ROMAN = 'M{0,3}(?:CM|CD|D?C{0,3})(?:XC|XL|L?X{0,3})(?:IX|IV|V?I{0,3})';
-const _ROMAN_RE = re.compile(`(?<![${WC}.])(${_ROMAN})\\.(?=${S}+([${LET}][${LET}']*))`);
+const _ROMAN_RE = re.compile(`(?=[MDCLXVI.])${nlb(`${WC}.`)}(${_ROMAN})\\.(?=${S}+([${LET}][${LET}']*))`, has('.'));
 const _ROMAN_VALUES = { I: 1, V: 5, X: 10, L: 50, C: 100, D: 500, M: 1000 };
 
 function _roman_to_int(s) {
@@ -757,7 +952,7 @@ function _roman_to_int(s) {
   return total;
 }
 
-const _ROMAN_SUFFIX_RE = re.compile(`(?<![${WC}.])([IVXLC]{2,}|[IVX])'([${LOW}]+)(?!${W})`);
+const _ROMAN_SUFFIX_RE = re.compile(`(?=[IVXLC])${nlb(`${WC}.`)}([IVXLC]{2,}|[IVX])'([${LOW}]+)(?!${W})`, has("'"));
 
 // A capitalized word after which "N." / "IV." is an ordinal: "Lig", "Murat", "Yüzyılda" (also "LİG").
 function _ordinal_noun(word) {
@@ -769,7 +964,7 @@ const _WORD_BEFORE_RE = re.compile(`([${LET}]+)[ \\t]+${END}`);
 // a title ("Dr.", "doktor", "Sayın") or another initial ("J. I. Smith") right before a lone I. / X.
 // (?i:...) is spelled out by ci()
 const _TITLE_BEFORE_RE = re.compile(
-  `(?:(?<!${W})(?:${L.INITIAL_TITLES.map(ci).join('|')})\\.?|(?<![${WC}.])[${UP}]\\.)[ \\t]+${END}`,
+  `(?:${nlb(WC)}(?:${L.INITIAL_TITLES.map(ci).join('|')})\\.?|${nlb(`${WC}.`)}[${UP}]\\.)[ \\t]+${END}`,
 );
 
 function _pass_roman(text) {
@@ -812,7 +1007,7 @@ function _pass_roman(text) {
   return _sub(_ROMAN_RE, repl, text);
 }
 
-const _ORDINAL_DOT_RE = re.compile(`${NB}(${D}{1,4})\\.(?=${S}+([${LET}][${LET}']*))`);
+const _ORDINAL_DOT_RE = re.compile(`${NBD}(${D}{1,4})\\.(?=${S}+([${LET}][${LET}']*))`, has_digit);
 
 function _pass_ordinals(text) {
   const repl = (m) => {
@@ -826,16 +1021,16 @@ function _pass_ordinals(text) {
 }
 
 const _NUMBER_RE = re.compile(
-  `(?<![${WC}.,])(-)?((?:${INT_TH}|${D}+)(?:,${D}+|\\.${D}+)?)(?:'([${LET}]+)|([${LOW}]+))?(?!${W})`,
+  `${NBS}(-)?((?:${INT_TH}|${D}+)(?:,${D}+|\\.${D}+)?)(?:'([${LET}]+)|([${LOW}]+))?(?!${W})`, has_digit,
 );
-const _LIST_RE = re.compile(`(?<![${WC}.,])${D}+(?:,${D}+){2,}(?![${WC}.,])`);
+const _LIST_RE = re.compile(`${NBD}${D}+(?:,${D}+){2,}(?![${WC}.,])`, (t) => t.includes(',') && has_digit(t));
 
 // dotted versions and addresses: 1.2.3, 10.15.7, 192.168.1.1 (thousands groups like 1.250.000 are numbers)
-const _VERSION_RE = re.compile(`(?<![${WC}.,])${D}+(?:\\.${D}+){2,}(?!${W}|[.,]${D})`);
+const _VERSION_RE = re.compile(`${NBD}${D}+(?:\\.${D}+){2,}(?!${W}|[.,]${D})`, (t) => t.includes('.') && has_digit(t));
 // a version wildcard: 3.x, 2.7.x
-const _VERSION_X_RE = re.compile(`(?<![${WC}.,])(${D}+(?:\\.${D}+)*)\\.[xX](?!${W})`);
+const _VERSION_X_RE = re.compile(`${NBD}(${D}+(?:\\.${D}+)*)\\.[xX](?!${W})`, has('xX'));
 // a word, a hyphen, a number: "klod-3.5", "covid-19" (capitalized ones are read by _pass_alnum)
-const _WORD_HYPHEN_NUM_RE = re.compile(`(?<=[${LET}]{2})-(?=${D})`);
+const _WORD_HYPHEN_NUM_RE = re.compile(`(?<=[${LET}]{2})-(?=${D})`, (t) => t.includes('-'));
 
 function _dotted(s) {
   return s.split('.').map((p) => (plen(p) <= 3 ? read_digit_group(p) : digits_to_words(p))).join(' nokta ');
@@ -846,27 +1041,45 @@ const _NUMBER_WORDS = new Set(split(
   'yüz bin milyon milyar trilyon katrilyon',
 ));
 
+// re.search(rf"([{LET}]+)\.?$", head).group(1), or '' when it does not match. Searching from the start, as Python does,
+// costs the whole text before every postcode candidate (O(n²) on an address list); the match can only be the letters
+// that end head, before an optional "." and the final newline $ allows, so they are read from the end.
+function _letters_at_end(head) {
+  let r = head.length;
+  if (head.endsWith('\n')) r--;
+  if (head[r - 1] === '.') r--;
+  let a = r;
+  while (a > 0 && _LET_CHAR.test(head[a - 1])) a--;
+  return head.slice(a, r);
+}
+const _LET_CHAR = new RegExp(`[${LET}]`); // LET is all BMP: one UTF-16 unit each
+
 // A bare 5-digit Turkish postcode inside an address, before the place name: "..., 34728 Kadıköy".
 //
 // The address is named by a whole address word (ADDRESS_CONTEXT: "Mah.", "sokak", "No"; not "katılan",
 // "mahallede"), and the number comes right after a comma, slash, colon, address word or door number
 // ("No:5 D:3 34728 Kadıköy"), never after an ordinary word ("Mahallede 15000 Suriyeli yaşıyor").
 // In ALL CAPS only a door number counts: "İSTİKLAL CADDESİ 50000 KİŞİYLE DOLDU" is a count.
+const _NEXT_NAME_RE = re.compile(`[ \\t]+([${UP}][${LET}]*)`);
+const _ADDRESS_WORD_RE = re.compile(`[${LOW}]+(?:'[${LOW}]+)?`);
 function _postcode(text, m, num) {
-  const nxt = re.compile(`[ \\t]+([${UP}][${LET}]*)`).match(text, end(m)); // re.match(..., text[m.end():])
+  const nxt = _NEXT_NAME_RE.match(text, end(m)); // re.match(..., text[m.end():])
   const d = [...num];
   // the first two characters against ASCII bounds: UTF-16 order agrees with code point order there
   const first2 = d.slice(0, 2).join('');
   if (d.length !== 5 || !(first2 >= '01' && first2 <= '81') || !nxt) return false;
-  const words = re.findall(`[${LOW}]+(?:'[${LOW}]+)?`, _context_before(text, m.index, 100));
+  const words = _ADDRESS_WORD_RE.findall(_context_before(text, m.index, 100));
   if (!words.some((w) => L.ADDRESS_CONTEXT.has(w))) return false;
   const head = rstrip(text.slice(0, m.index), ' \t');
-  let prev = re.search(`([${LET}]+)\\.?${END}`, head);
-  prev = prev ? tr_lower(prev[1]) : '';
+  const prev = tr_lower(_letters_at_end(head));
   const door = isdecimal(last_cp(head)) || _NUMBER_WORDS.has(prev);
   if (is_all_caps(nxt[1])) return door;
   return door || !head || ',/:;\n'.includes(last_cp(head)) || L.ADDRESS_CONTEXT.has(prev);
 }
+
+const _ID_WORD_AFTER_RE = re.compile(`${S}*(?:numara|no${B}|nolu|kodu|kodlu)`);
+const _SCALE_AFTER_RE = re.compile(`${S}+(?:bin|milyon|milyar|trilyon)${B}`);
+const _UNIT_WORD_AFTER_RE = re.compile(`${S}+(?:${_UNIT_WORDS_RE})`);
 
 function _pass_numbers(text) {
   text = _sub(_LIST_RE, (m) => m[0].split(',').map((x) => number_to_words(py_int(x))).join(', '), text);
@@ -886,7 +1099,7 @@ function _pass_numbers(text) {
         num.startsWith('0')
         || len >= 10
         || (!count && _has_cue(ctx, L.ID_CONTEXT, 3))
-        || re.match(`${S}*(?:numara|no${B}|nolu|kodu|kodlu)`, after) !== null
+        || _ID_WORD_AFTER_RE.match(after) !== null
         || _postcode(text, m, num)
       );
       const codelike = len >= 4 && !count && _has_cue(ctx, L.CODE_CONTEXT, 2);
@@ -900,8 +1113,8 @@ function _pass_numbers(text) {
     }
     const ctx_before = _context_before(text, m.index, 24);
     const dot_word = (
-      re.match(`${S}+(?:bin|milyon|milyar|trilyon)${B}`, after)
-      || re.match(`${S}+(?:${_UNIT_WORDS_RE})`, after)
+      _SCALE_AFTER_RE.match(after)
+      || _UNIT_WORD_AFTER_RE.match(after)
       || _has_word(ctx_before, ['yüzde', 'oran', 'faiz', 'puan', 'not', 'ortalama'])
     ) ? 'virgül' : 'nokta';
     const words = read_number(num, dot_word);
@@ -927,9 +1140,7 @@ function _pass_numbers(text) {
 // A period after a number word is a decimal point ("on iki.31" -> on iki nokta otuz bir); after any other word
 // it ends an abbreviation ("Tablo.3'te" -> Tablo üçte, "md.5" -> md beş). A suffix stays on its number.
 function _pass_leftover_digits(text) {
-  text = re.sub(
-    `([${LET}]+)\\.(?=${D})`, (m) => m[1] + (_NUMBER_WORDS.has(tr_lower(m[1])) ? ' nokta ' : ' '), text,
-  );
+  text = _WORD_DOT_DIGIT_RE.sub((m) => m[1] + (_NUMBER_WORDS.has(tr_lower(m[1])) ? ' nokta ' : ' '), text);
 
   const read = (m) => {
     const [, digits, suf] = m;
@@ -939,10 +1150,14 @@ function _pass_leftover_digits(text) {
     return ` ${_attach_number_suffix(py_int(digits), words, suf)} `;
   };
 
-  return re.sub(`(${D}+)(?:'([${LET}]+))?`, read, text);
+  return _DIGITS_RE.sub(read, text);
 }
+// (?<![LET]): a match takes the whole run of letters before the "."; Python, failing at the start of a long run of
+// letters without one, tries again from every letter of it (O(n²)), and every one of those fails the same way
+const _WORD_DOT_DIGIT_RE = re.compile(`(?<![${LET}])([${LET}]+)\\.(?=${D})`, (t) => t.includes('.') && has_digit(t));
+const _DIGITS_RE = re.compile(`(${D}+)(?:'([${LET}]+))?`, has_digit);
 
-const _POWER_RE = re.compile(`(?:(?<!${W})([A-Za-z]{1,2}|${D}+(?:[.,]${D}+)?)|(\\)))([²³])(?!${W})`);
+const _POWER_RE = re.compile(`(?:${nlb(WC)}([A-Za-z]{1,2}|${D}+(?:[.,]${D}+)?)|(\\)))([²³])(?!${W})`, has('²³'));
 
 // x² -> iks kare, a³ -> a küp, 10² -> 10 kare, (a+b)² -> (a+b) kare, m² (no number before it) -> metrekare.
 function _pass_powers(text) {
@@ -961,34 +1176,46 @@ function _pass_powers(text) {
   return _sub(_POWER_RE, repl, text);
 }
 
-const _ACRONYM_RE = re.compile(`(?<![${WC}'])([${UP}][${UP}]+|PhD)(?:'([${LET}]+))?(?!${W})`);
-const _SINGLE_LETTER_RE = re.compile(`(?<![${WC}'.])([A-NPR-ZÇĞİÖŞÜ])(?=${S}+[${LOW}])`);
+const _ACRONYM_RE = re.compile(`(?=[${UP}])${nlb(`${WC}'`)}([${UP}][${UP}]+|PhD)(?:'([${LET}]+))?(?!${W})`);
+const _SINGLE_LETTER_RE = re.compile(`(?=[A-NPR-ZÇĞİÖŞÜ])${nlb(`${WC}'.`)}([A-NPR-ZÇĞİÖŞÜ])(?=${S}+[${LOW}])`);
 // a capital letter with a suffix: "X'te" -> ikste, "A'dan Z'ye" -> adan zeye (not the pronoun "O'nun"); the
 // suffix is lowercase or ALL CAPS ("X'TE"), so a name with an elided article stays: "D'Artagnan", "L'Occitane"
-const _SINGLE_LETTER_SUFFIX_RE = re.compile(`(?<![${WC}'.])([A-NPR-ZÇĞİÖŞÜ])'([${LOW}]+|[${UP}]+)(?![${WC}'])`);
+const _SINGLE_LETTER_SUFFIX_RE = re.compile(
+  `(?=[A-NPR-ZÇĞİÖŞÜ])${nlb(`${WC}'.`)}([A-NPR-ZÇĞİÖŞÜ])'([${LOW}]+|[${UP}]+)(?![${WC}'])`, has("'"),
+);
 // an initial before a name: "V. Öztürk" -> "ve. Öztürk", "J. K. Rowling"; the period stays (it may end a sentence)
-const _INITIAL_RE = re.compile(`(?<![${WC}'.])([${UP}])\\.(?=${S}+[${UP}])`);
-const _SENTENCE_SPLIT_RE = re.compile(`(?<=[.!?])${S}+`);
+const _INITIAL_RE = re.compile(`(?=[${UP}])${nlb(`${WC}'.`)}([${UP}])\\.(?=${S}+[${UP}])`, has('.'));
+const _SENTENCE_SPLIT_RE = re.compile(`(?<=[.!?])${S}+`, null, false);
 
 // lowercase words the number passes wrote ("on dört otuzda", "elli bin", "yüzde", "lira"): in "SAAT 14:30'DA
 // BAŞLAYACAK DÖRT ETKİNLİK" they do not make the headline a mixed-case sentence
 const _EXPANSION_STEMS = [...new Set([..._NUMBER_WORDS, 'dörd', 'nokta', 'virgül', 'buçuk', 'yüzde', 'binde', 'eksi',
   'artı', 'çarpı', 'bölü', 'ila', 'lira', 'kuruş', 'dolar', 'avro', 'sent', 'sterlin', 'derece'])].sort();
 
+// A word of [LET] letters that is_all_caps: two or more, all capitals. A sentence needs three for a headline.
+const _CAPS_WORD_RE = new RegExp(`(?<![${LET}])[${UP}]{2,}(?![${LET}])`, 'g');
+const _three_caps_words = (sent) => {
+  _CAPS_WORD_RE.lastIndex = 0;
+  return _CAPS_WORD_RE.test(sent) && _CAPS_WORD_RE.test(sent) && _CAPS_WORD_RE.test(sent);
+};
+
 // Lowercase ALL-CAPS sentences, keeping known acronyms for the acronym pass.
 function _lower_caps_headlines(text) {
   const out = [];
   for (let sent of _SENTENCE_SPLIT_RE.split(text)) {
-    const words = re.findall(`[${LET}]+`, sent)
+    // caps_words below is the [LET] words that are two or more capitals: fewer than three, and it is no headline
+    if (!_three_caps_words(sent)) {
+      out.push(sent);
+      continue;
+    }
+    const words = _LET_WORD_RE.findall(sent)
       .filter((w) => !(islower(w) && _EXPANSION_STEMS.some((p) => w.startsWith(p))));
     const letters = words.flatMap((w) => [...w]);
     const caps_words = words.filter((w) => is_all_caps(w));
     const upper = letters.filter((c) => isupper(c)).length;
     if (letters.length >= 12 && upper / letters.length > 0.8 && caps_words.length >= 3) {
-      sent = re.sub(
-        `[${LET}]+`,
-        (m) => (L.ACRONYMS.has(m[0]) || !_pronounceable_or_word(m[0]) ? m[0] : tr_lower(m[0])),
-        sent,
+      sent = _LET_WORD_RE.sub(
+        (m) => (L.ACRONYMS.has(m[0]) || !_pronounceable_or_word(m[0]) ? m[0] : tr_lower(m[0])), sent,
       );
     }
     out.push(sent);
@@ -1051,30 +1278,45 @@ function _pass_letter_names(text) {
   return _INITIAL_RE.sub((m) => `${L.LETTER_NAMES.get(m[1]) ?? tr_lower(m[1])}.`, text);
 }
 
+// _pass_symbols' patterns, each with the one character it cannot match without
+const _SYMBOLS = [
+  [re.compile(`(?=[${SC}&])(?:${S}&${S}|${lb(WC)}&(?=${W}))`, has('&')), ' ve '],
+  [re.compile(`(?=[${SC}x×])${lb(D)}${S}?[x×]${S}?(?=${D})`, has('x×')), ' çarpı '],
+  [re.compile(`${S}?=${S}?`, has('=')), ' eşittir '],
+  [re.compile(`(?=[${SC}+])(?:${lb(WC)}${S}\\+${S}(?=${W})|${lb(D)}\\+(?=${D}))`, has('+')), ' artı '],
+  [re.compile('±', has('±')), ' artı eksi '],
+  [re.compile(`[~≈]${S}?(?=${W})`, has('~≈')), 'yaklaşık '],
+  [re.compile(`(?=#)${nlb(WC)}#(?=${W})`, has('#')), ''],
+  [re.compile(`(?=@)${nlb(WC)}@(?=${W})`, has('@')), ''],
+  [re.compile(`§${S}?`, has('§')), 'paragraf '],
+  [re.compile(`№${S}?`, has('№')), 'numara '],
+  [re.compile('[*_|•→←▪►✓✔]', has('*_|•→←▪►✓✔')), ' '],
+];
+// Kadıköy/İstanbul -> Kadıköy, İstanbul
+const _CITY_SLASH_RE = re.compile(`(?=[${UP}])${B}([${UP}][${LOW}]+)/(?=[${UP}][${LOW}])`, _has_slash);
+const _WORD_SLASH_RE = re.compile(`(?=/)${lb(WC)}/(?=${W})`, _has_slash);
+const _REPEATED_MARK_RE = re.compile(String.raw`([!?])\1+`, has('!?'));
+
 function _pass_symbols(text) {
-  text = re.sub(`${S}&${S}|(?<=${W})&(?=${W})`, ' ve ', text);
-  text = re.sub(`(?<=${D})${S}?[x×]${S}?(?=${D})`, ' çarpı ', text);
-  text = re.sub(`${S}?=${S}?`, ' eşittir ', text);
-  text = re.sub(`(?<=${W})${S}\\+${S}(?=${W})|(?<=${D})\\+(?=${D})`, ' artı ', text);
-  text = re.sub('±', ' artı eksi ', text);
-  text = re.sub(`[~≈]${S}?(?=${W})`, 'yaklaşık ', text);
-  text = re.sub(`(?<!${W})#(?=${W})`, '', text);
-  text = re.sub(`(?<!${W})@(?=${W})`, '', text);
-  text = re.sub(`§${S}?`, 'paragraf ', text);
-  text = re.sub(`№${S}?`, 'numara ', text);
-  text = re.sub('[*_|•→←▪►✓✔]', ' ', text);
-  // Kadıköy/İstanbul -> Kadıköy, İstanbul
-  text = re.sub(`${B}([${UP}][${LOW}]+)/(?=[${UP}][${LOW}])`, (m) => `${m[1]}, `, text);
-  text = re.sub(`(?<=${W})/(?=${W})`, ' ', text);
-  text = re.sub(String.raw`([!?])\1+`, (m) => m[1], text);
+  for (const [rx, word] of _SYMBOLS) text = rx.sub(word, text);
+  if (U_PAIR_BUG && U_PAIR_RE.test(text)) throw _engine_error(text); // a "#" or "@" between them is gone
+  text = _CITY_SLASH_RE.sub((m) => `${m[1]}, `, text);
+  text = _WORD_SLASH_RE.sub(' ', text);
+  text = _REPEATED_MARK_RE.sub((m) => m[1], text);
   return text;
 }
 
+// (?<!\s): the match takes a whole run of spaces; Python retries a run that no punctuation ends from each of its
+// characters (O(n²) on a long run of newlines), and all of them fail. All BMP: no u flag (Safari 16.4 is O(n²) with it)
+const _SPACE_PUNCT_RE = re.compile(`(?<![${SC}])${S}+([,.;:!?)])`, null, false);
+const _PAREN_SPACE_RE = re.compile(`([(])${S}+`, has('('), false);
+const _COMMAS_RE = re.compile(`,${S}*,`, has(','), false);
+
 function _cleanup(text) {
-  text = re.sub(`${S}+([,.;:!?)])`, (m) => m[1], text);
-  text = re.sub(`([(])${S}+`, (m) => m[1], text);
-  text = re.sub(`,${S}*,`, ',', text);
-  text = re.sub(String.raw`[ \t]+`, ' ', text);
+  text = _SPACE_PUNCT_RE.sub((m) => m[1], text);
+  text = _PAREN_SPACE_RE.sub((m) => m[1], text);
+  text = _COMMAS_RE.sub(',', text);
+  text = _BLANKS_RE.sub(' ', text);
   return strip(text);
 }
 
@@ -1113,16 +1355,52 @@ const _PASSES = [
 // marks), so they are swapped for a noncharacter, which every engine treats as Python treats them, and swapped back
 // at the end. No pass drops, adds or reorders one (only a URL path takes one in, and keeps it), so the n-th
 // placeholder out is the n-th character in; the placeholder itself is in the class, so one in the input round-trips.
-const _UNASSIGNED_RE = re.compile(`[${UNASSIGNED}]`);
 const _NONCHAR = '\u{fdd0}';
 // A lone surrogate is a code point of its own to Python, and stays one when a pass deletes what stood between it and
 // another ("\ud83d\u200d\ude00" loses its ZWJ, "5\ud800\ue000\udc00" its mark); a JS string would then hold one astral
 // character there, a letter to \w if it is one. So lone surrogates get a noncharacter of their own for the passes
-// (no letter, digit, space or cased character, as a surrogate is to Python) and come back at the end. After the swap
-// above no U+FDD1 is left in the text, so every one in the output is such a placeholder.
-const _LONE_SURROGATE_RE = /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/g;
+// (no letter, digit, space or cased character, as a surrogate is to Python) and come back at the end. U+FDD1 is
+// unassigned, so one in the input is swapped for U+FDD0 with the rest: every U+FDD1 in the output is a placeholder.
 const _SURROGATE = '\u{fdd1}';
 const _PLACEHOLDER_RE = /[\ufdd0\ufdd1]/g;
+// Both swaps are one pass of a pattern without the u flag, before any u-flag pattern sees the text: Safari 26
+// (WebKit 2215 to 2311) reads a lone high surrogate and a following U+FC00..U+FFFF as one code point under the u flag
+// (py.js U_PAIR_BUG; a U+FEFF after one was not removed). The pass takes every surrogate pair (swapped when it is
+// unassigned), every other surrogate (a lone one) and every unassigned BMP character: UNASSIGNED split into a BMP
+// class and astral ranges.
+const [_BMP_UNASSIGNED, _ASTRAL_UNASSIGNED] = (() => {
+  const hex = (n) => `\\u${n.toString(16).padStart(4, '0')}`;
+  let bmp = '';
+  const astral = [];
+  for (const [, a, b = a] of UNASSIGNED.matchAll(/\\u\{([0-9a-f]+)\}(?:-\\u\{([0-9a-f]+)\})?/g)) {
+    const lo = parseInt(a, 16);
+    const hi = parseInt(b, 16);
+    if (lo <= 0xffff) bmp += `${hex(lo)}-${hex(Math.min(hi, 0xffff))}`;
+    if (hi > 0xffff) astral.push(Math.max(lo, 0x10000), hi);
+  }
+  return [bmp, Uint32Array.from(astral)];
+})();
+const _PIN_RE = new RegExp(`[\\ud800-\\udbff][\\udc00-\\udfff]|[\\ud800-\\udfff]|[${_BMP_UNASSIGNED}]`, 'g');
+
+// [text with the placeholders, the unassigned characters they replace, the lone surrogates]
+function _pin(text) {
+  const unassigned = [];
+  const lone = [];
+  const pinned = text.replace(_PIN_RE, (c) => {
+    if (c.length === 2) {
+      if (!in_table(_ASTRAL_UNASSIGNED, c.codePointAt(0))) return c;
+      unassigned.push(c);
+      return _NONCHAR;
+    }
+    if (c >= '\ud800' && c <= '\udfff') {
+      lone.push(c);
+      return _SURROGATE;
+    }
+    unassigned.push(c);
+    return _NONCHAR;
+  });
+  return [pinned, unassigned, lone];
+}
 
 // The placeholders of out back to the characters they stand for, in order; drop: leave out the surrogates. null when
 // a count changed (no pass is known to do that), as the placeholders would land in the wrong places.
@@ -1141,12 +1419,9 @@ function _unpin(out, unassigned, lone, drop) {
 // it (it starts with encode("utf-8", "ignore"), which drops every surrogate code point; two that a pass brought
 // together are one astral character in the JS string, so frontend() cannot tell them apart any more).
 function _normalize(text) {
-  if (typeof text !== 'string') throw new TypeError(`normalize() argument must be str, not ${typeof text}`);
-  const unassigned = _UNASSIGNED_RE.findall(text);
-  const lone = text.match(_LONE_SURROGATE_RE) || [];
+  if (typeof text !== 'string') throw type_error(`normalize() argument must be str, not ${typeof text}`);
+  const [pinned, unassigned, lone] = _pin(text);
   if (unassigned.length || lone.length) {
-    let pinned = unassigned.length ? _UNASSIGNED_RE.sub(_NONCHAR, text) : text;
-    if (lone.length) pinned = pinned.replace(_LONE_SURROGATE_RE, _SURROGATE);
     const out = _run(pinned, _PASSES);
     const spoken = _unpin(out, unassigned, lone, false);
     if (spoken !== null) return [spoken, lone.length ? _unpin(out, unassigned, lone, true) : spoken];
@@ -1154,6 +1429,18 @@ function _normalize(text) {
   const out = _run(text, _PASSES);
   return [out, out];
 }
+
+// For tools/parity/matchers_check.mjs: each linear matcher with the pattern it stands for, as Python writes it
+export const _testing = {
+  url: [_URL_RE, _URL_SRC],
+  email: [_EMAIL_RE, _EMAIL_SRC],
+  alnum: [_ALNUM_RE, _ALNUM_SRC],
+  leftover: [re.compile(`(?<![${LET}])([${LET}]+)\\.(?=${D})`), `([${LET}]+)\\.(?=${D})`],
+  cleanup: [_SPACE_PUNCT_RE, `${S}+([,.;:!?)])`],
+  letters_at_end: [_letters_at_end, `([${LET}]+)\\.?${END}`],
+  preclean: _preclean,
+  passes: _PASSES,
+};
 
 // Convert written Turkish into its spoken form (for TTS input).
 //
