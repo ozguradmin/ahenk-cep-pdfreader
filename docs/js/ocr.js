@@ -1,5 +1,6 @@
 // Reading text from pictures: scanned PDFs and photos of pages, with Tesseract (tesseract.js, Turkish LSTM data).
-// Loaded only when needed: the engine and the Turkish data are about 10 MB more, from jsdelivr like everything else.
+// Loaded only when needed: the engine and the Turkish data are about 3.5 MB more (tesseract.js keeps the data in
+// IndexedDB for next time), from jsdelivr like everything else.
 
 import { CDN } from './config.js';
 import { plainBlocks } from './text.js';
