@@ -1,0 +1,379 @@
+<!doctype html>
+<html lang="tr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Ahenk Okur — Belgelerinizi Türkçe sesle dinleyin</title>
+  <meta name="description" content="PDF, Word, EPUB ve metin dosyalarınızı tarayıcınızda Türkçe sese dönüştürün. Ahenk Cep modeli cihazınızda çalışır; dosyanız hiçbir sunucuya gitmez. Dinleyin ya da MP3/WAV olarak indirin.">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://ozguradmin.github.io/ahenk-cep-pdfreader/">
+  <meta property="og:title" content="Ahenk Okur — Belgelerinizi Türkçe sesle dinleyin">
+  <meta property="og:description" content="PDF, Word ve EPUB dosyalarını tarayıcınızda Türkçe sese çevirin. Kurulum yok, dosyanız cihazınızdan çıkmaz.">
+  <meta property="og:image" content="https://ozguradmin.github.io/ahenk-cep-pdfreader/og.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:locale" content="tr_TR">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="color-scheme" content="light dark">
+  <meta name="theme-color" content="#f4efe6" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#121110" media="(prefers-color-scheme: dark)">
+  <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <link rel="manifest" href="manifest.webmanifest">
+  <script>
+    // coi-serviceworker.js makes the page cross-origin isolated (threads in WebAssembly need it): on a first visit it
+    // registers itself and reloads the page once; js/app.js waits for that reload before it starts the model.
+    // Settings as on https://ozguradmin.github.io/ahenk-turkish-tts/ (COEP require-corp everywhere, no degrade).
+    window.coiState = { reloading: 0, reloaded: false };
+    window.coi = {
+      quiet: true,
+      coepCredentialless: () => false,
+      coepDegrade: () => false,
+      doReload: () => {
+        window.coiState.reloading = performance.now();
+        const reload = () => window.location.reload();
+        Promise.race([navigator.serviceWorker.ready, new Promise((r) => { setTimeout(r, 5000); })]).then(reload, reload);
+      },
+    };
+    try { window.coiState.reloaded = !!sessionStorage.getItem('coiReloadedBySelf'); } catch { window.coiState.reloaded = true; }
+    try { const th = localStorage.getItem('ahenk-okur-theme'); if (th === 'light' || th === 'dark') document.documentElement.dataset.theme = th; } catch { /* storage blocked */ }
+  </script>
+  <script src="coi-serviceworker.js"></script>
+  <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
+  <link rel="preconnect" href="https://huggingface.co" crossorigin>
+  <!-- Fonts do not hold up the first paint: the page shows in system fonts and switches when these arrive. -->
+  <link rel="preload" as="style" href="https://cdn.jsdelivr.net/npm/@fontsource-variable/newsreader@5.3.0/opsz.css" crossorigin onload="this.onload=null;this.rel='stylesheet'">
+  <link rel="preload" as="style" href="https://cdn.jsdelivr.net/npm/@fontsource-variable/newsreader@5.3.0/opsz-italic.css" crossorigin onload="this.onload=null;this.rel='stylesheet'">
+  <link rel="preload" as="style" href="https://cdn.jsdelivr.net/npm/@fontsource-variable/hanken-grotesk@5.3.0/index.css" crossorigin onload="this.onload=null;this.rel='stylesheet'">
+  <noscript>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource-variable/newsreader@5.3.0/opsz.css" crossorigin>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource-variable/newsreader@5.3.0/opsz-italic.css" crossorigin>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource-variable/hanken-grotesk@5.3.0/index.css" crossorigin>
+  </noscript>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <svg width="0" height="0" class="sprite" aria-hidden="true" focusable="false">
+    <symbol id="i-play" viewBox="0 0 24 24"><path d="M8 5.5v13a1 1 0 0 0 1.5.86l10.6-6.5a1 1 0 0 0 0-1.72L9.5 4.64A1 1 0 0 0 8 5.5Z" fill="currentColor"/></symbol>
+    <symbol id="i-pause" viewBox="0 0 24 24"><rect x="6.5" y="5" width="4" height="14" rx="1.2" fill="currentColor"/><rect x="13.5" y="5" width="4" height="14" rx="1.2" fill="currentColor"/></symbol>
+    <symbol id="i-back" viewBox="0 0 24 24"><path d="M4.5 12a7.5 7.5 0 1 0 2.2-5.3M4.5 4.5v3.7h3.7" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><text x="12" y="15.2" text-anchor="middle" font-size="7.2" font-weight="700" font-family="system-ui, sans-serif" fill="currentColor">15</text></symbol>
+    <symbol id="i-fwd" viewBox="0 0 24 24"><path d="M19.5 12a7.5 7.5 0 1 1-2.2-5.3M19.5 4.5v3.7h-3.7" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><text x="12" y="15.2" text-anchor="middle" font-size="7.2" font-weight="700" font-family="system-ui, sans-serif" fill="currentColor">15</text></symbol>
+    <symbol id="i-down" viewBox="0 0 24 24"><path d="M12 4v11m0 0-4.5-4.5M12 15l4.5-4.5M5 19.5h14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-upload" viewBox="0 0 24 24"><path d="M12 15V4m0 0L7.5 8.5M12 4l4.5 4.5M5 15v3.5A1.5 1.5 0 0 0 6.5 20h11a1.5 1.5 0 0 0 1.5-1.5V15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-doc" viewBox="0 0 24 24"><path d="M14 3.5H7.5A1.5 1.5 0 0 0 6 5v14a1.5 1.5 0 0 0 1.5 1.5h9A1.5 1.5 0 0 0 18 19V7.5L14 3.5Zm0 0V7a.5.5 0 0 0 .5.5H18M9 12h6M9 15.5h6" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-text" viewBox="0 0 24 24"><path d="M5 6.5h14M5 10.5h14M5 14.5h9M5 18.5h6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+    <symbol id="i-spark" viewBox="0 0 24 24"><path d="M12 3.5c.5 4.2 2.3 6 6.5 6.5-4.2.5-6 2.3-6.5 6.5-.5-4.2-2.3-6-6.5-6.5 4.2-.5 6-2.3 6.5-6.5ZM18.5 15.5c.2 1.6.9 2.3 2.5 2.5-1.6.2-2.3.9-2.5 2.5-.2-1.6-.9-2.3-2.5-2.5 1.6-.2 2.3-.9 2.5-2.5Z" fill="currentColor"/></symbol>
+    <symbol id="i-wave" viewBox="0 0 24 24"><path d="M3 12h1.5M6.5 8.5v7M10 5v14M13.5 9v6M17 6.5v11M20.5 12H21" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/></symbol>
+    <symbol id="i-lock" viewBox="0 0 24 24"><rect x="5" y="10.5" width="14" height="10" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M8.5 10.5V8a3.5 3.5 0 0 1 7 0v2.5" fill="none" stroke="currentColor" stroke-width="1.8"/></symbol>
+    <symbol id="i-chip" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M9.5 3v3M14.5 3v3M9.5 18v3M14.5 18v3M3 9.5h3M3 14.5h3M18 9.5h3M18 14.5h3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12.5 4.5 4.5L19 7.5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-x" viewBox="0 0 24 24"><path d="M6.5 6.5l11 11m0-11-11 11" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
+    <symbol id="i-stop" viewBox="0 0 24 24"><rect x="6.5" y="6.5" width="11" height="11" rx="2" fill="currentColor"/></symbol>
+    <symbol id="i-edit" viewBox="0 0 24 24"><path d="M4.5 19.5h4l10-10a2.8 2.8 0 0 0-4-4l-10 10v4ZM13.5 6.5l4 4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
+    <symbol id="i-eye" viewBox="0 0 24 24"><path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="1.8"/></symbol>
+    <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M12 2.5v2.2M12 19.3v2.2M2.5 12h2.2M19.3 12h2.2M5.3 5.3l1.6 1.6M17.1 17.1l1.6 1.6M5.3 18.7l1.6-1.6M17.1 6.9l1.6-1.6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+    <symbol id="i-moon" viewBox="0 0 24 24"><path d="M20 14.6A8 8 0 0 1 9.4 4a8 8 0 1 0 10.6 10.6Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></symbol>
+    <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M12 11v5.5M12 7.6v.1" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
+    <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M19.5 12a7.5 7.5 0 1 1-2.2-5.3m2.2-2.2v4.2h-4.2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-headphones" viewBox="0 0 24 24"><path d="M4 15v-3a8 8 0 0 1 16 0v3M4 15a2 2 0 0 1 2-2h1v7H6a2 2 0 0 1-2-2v-3Zm16 0a2 2 0 0 0-2-2h-1v7h1a2 2 0 0 0 2-2v-3Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></symbol>
+    <symbol id="i-mark" viewBox="0 0 32 32"><path d="M3 16L4 16L5 16.5L6 17.4L7 18.3L8 19.1L9 19.5L10 19.3L11 18.4L12 16.9L13 15.1L14 13.3L15 11.7L16 10.8L17 10.5L18 11.1L19 12.3L20 13.9L21 15.7L22 17.2L23 18.2L24 18.7L25 18.5L26 17.9L27 17.1L28 16.4L29 16" fill="none" stroke="var(--mark-2, currentColor)" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/><path d="M3 16L4 15.6L5 14.6L6 13.2L7 11.8L8 11L9 11.1L10 12.2L11 14.2L12 17L13 19.9L14 22.5L15 24.4L16 25L17 24.4L18 22.5L19 19.9L20 17L21 14.2L22 12.2L23 11.1L24 11L25 11.8L26 13.2L27 14.6L28 15.6L29 16" fill="none" stroke="var(--mark-1, currentColor)" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  </svg>
+
+  <a class="skip" href="#studio">Belge yükleme alanına geç</a>
+
+  <header class="top">
+    <div class="wrap top-row">
+      <a class="brand" href="./" aria-label="Ahenk Okur, ana sayfa">
+        <span class="brand-mark"><svg viewBox="0 0 32 32" aria-hidden="true"><use href="#i-mark"/></svg></span>
+        <span class="brand-name">Ahenk <em>Okur</em></span>
+      </a>
+      <div class="top-actions">
+        <a class="chip" id="chip" href="#model" aria-live="polite">
+          <span class="chip-dot" aria-hidden="true"></span>
+          <span id="chip-text">Model yükleniyor</span>
+        </a>
+        <button class="icon-btn" id="theme" type="button" aria-label="Koyu temaya geç">
+          <svg class="ic ic-moon" aria-hidden="true"><use href="#i-moon"/></svg>
+          <svg class="ic ic-sun" aria-hidden="true"><use href="#i-sun"/></svg>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <section class="hero wrap">
+      <div class="hero-copy">
+        <p class="eyebrow"><span>PDF</span><span>Word</span><span>EPUB</span><span>Metin</span><span class="arrow" aria-hidden="true">→</span><span>Türkçe ses</span></p>
+        <h1>Belgelerinizi <em>dinleyin.</em></h1>
+        <p class="lede">Dosyanızı bırakın; Ahenk Okur metni ayıklar ve doğal bir Türkçe sesle okur. Üretilirken dinlemeye başlayın, bitince MP3 ya da WAV olarak indirin. Hepsi tarayıcınızda olur, dosyanız cihazınızdan çıkmaz.</p>
+        <ul class="facts">
+          <li><svg class="ic" aria-hidden="true"><use href="#i-lock"/></svg>Cihazınızda çalışır</li>
+          <li><svg class="ic" aria-hidden="true"><use href="#i-spark"/></svg>Ücretsiz, kayıt yok</li>
+          <li><svg class="ic" aria-hidden="true"><use href="#i-down"/></svg>MP3 ve WAV indirme</li>
+        </ul>
+      </div>
+
+      <aside class="model-card" id="model" aria-labelledby="model-title">
+        <div class="ring" aria-hidden="true">
+          <svg viewBox="0 0 120 120"><circle class="ring-bg" cx="60" cy="60" r="52"/><circle class="ring-fg" id="ring-fg" cx="60" cy="60" r="52" pathLength="100"/></svg>
+          <div class="ring-num"><span id="ring-pct" class="num">0</span><small>%</small></div>
+          <svg class="ring-ok ic" aria-hidden="true"><use href="#i-check"/></svg>
+        </div>
+        <div class="model-body">
+          <p class="model-kicker">Ses modeli · Ahenk Cep</p>
+          <h2 id="model-title">Model hazırlanıyor</h2>
+          <p id="model-sub" class="model-sub">Sayfa açılınca kendiliğinden yüklenir.</p>
+          <div class="bar" role="progressbar" aria-labelledby="model-title" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="model-bar"><i id="model-fill"></i></div>
+          <ol class="model-steps" aria-label="Yükleme aşamaları">
+            <li id="ms-download">İndir</li>
+            <li id="ms-open">Hazırla</li>
+            <li id="ms-ready">Hazır</li>
+          </ol>
+          <p class="model-err" id="model-err" hidden></p>
+          <button class="btn btn-ghost btn-sm" id="retry" type="button" hidden><svg class="ic" aria-hidden="true"><use href="#i-refresh"/></svg>Tekrar dene</button>
+        </div>
+      </aside>
+    </section>
+
+    <section class="studio wrap" id="studio" aria-label="Belgeden sese">
+      <div class="studio-card">
+        <ol class="stepper" id="stepper">
+          <li data-step="1"><span class="st-num">1</span><span class="st-label">Belge</span></li>
+          <li data-step="2"><span class="st-num">2</span><span class="st-label">Metin</span></li>
+          <li data-step="3"><span class="st-num">3</span><span class="st-label">Ses</span></li>
+        </ol>
+
+        <!-- 1: upload -->
+        <div class="panel" id="panel-upload">
+          <label class="drop" id="drop" for="file">
+            <input type="file" id="file" class="sr-only" accept=".pdf,.docx,.odt,.epub,.txt,.md,.html,.htm,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.oasis.opendocument.text,application/epub+zip,text/plain,text/markdown,text/html,image/*">
+            <span class="drop-art" aria-hidden="true">
+              <span class="sheet sheet-back"></span>
+              <span class="sheet sheet-front"><i></i><i></i><i></i><i></i></span>
+              <span class="drop-wave"><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span>
+            </span>
+            <span class="drop-title">Belgenizi buraya bırakın</span>
+            <span class="drop-sub">ya da <u>cihazınızdan seçin</u></span>
+            <span class="drop-formats" aria-label="Desteklenen biçimler"><b>PDF</b><b>DOCX</b><b>ODT</b><b>EPUB</b><b>TXT</b><b>Görsel</b></span>
+          </label>
+          <div class="drop-busy" id="extracting" hidden>
+            <div class="spinner" aria-hidden="true"></div>
+            <div class="drop-busy-text">
+              <strong id="ex-title">Belge okunuyor</strong>
+              <span id="ex-sub">Hazırlanıyor…</span>
+              <div class="bar bar-sm" role="progressbar" aria-labelledby="ex-title" aria-valuemin="0" aria-valuemax="100" id="ex-bar"><i id="ex-fill"></i></div>
+            </div>
+          </div>
+          <div class="alt-row">
+            <button class="btn btn-ghost" id="paste-btn" type="button"><svg class="ic" aria-hidden="true"><use href="#i-text"/></svg>Metin yapıştır</button>
+            <button class="btn btn-ghost" id="sample-btn" type="button"><svg class="ic" aria-hidden="true"><use href="#i-spark"/></svg>Örnek metinle dene</button>
+          </div>
+          <p class="privacy"><svg class="ic" aria-hidden="true"><use href="#i-lock"/></svg>Dosyanız bu cihazdan çıkmaz: okuma da seslendirme de tarayıcınızda yapılır.</p>
+        </div>
+
+        <!-- 2: text -->
+        <div class="panel" id="panel-text" hidden>
+          <div class="doc-head">
+            <span class="doc-icon" id="doc-icon" data-kind="txt">TXT</span>
+            <div class="doc-meta">
+              <h2 class="doc-name" id="doc-name">Belge</h2>
+              <p class="doc-stats" id="doc-stats"></p>
+            </div>
+            <button class="btn btn-ghost btn-sm" id="change-doc" type="button"><svg class="ic" aria-hidden="true"><use href="#i-upload"/></svg><span>Başka belge</span></button>
+          </div>
+
+          <div class="note note-warn" id="ocr-offer" hidden>
+            <svg class="ic" aria-hidden="true"><use href="#i-eye"/></svg>
+            <div>
+              <p id="ocr-text">Bu PDF taranmış görünüyor: sayfalarında okunabilir metin yok.</p>
+              <button class="btn btn-sm btn-dark" id="ocr-btn" type="button">Görüntüden oku (OCR)</button>
+              <span class="hint">Türkçe OCR yaklaşık 10 MB ek indirir; sayfa başına birkaç saniye sürer.</span>
+            </div>
+          </div>
+
+          <div class="range" id="range" hidden>
+            <span class="range-label">Sayfalar</span>
+            <input type="number" id="range-from" inputmode="numeric" min="1" value="1" aria-label="İlk sayfa">
+            <span aria-hidden="true">–</span>
+            <input type="number" id="range-to" inputmode="numeric" min="1" value="1" aria-label="Son sayfa">
+            <span class="hint" id="range-total"></span>
+          </div>
+
+          <label class="field-label" for="editor">Okunacak metin <span class="hint">· dilediğiniz gibi düzenleyebilirsiniz; paragrafları boş satırla ayırın</span></label>
+          <textarea id="editor" class="editor" spellcheck="false" lang="tr" placeholder="Seslendirmek istediğiniz metni buraya yazın ya da yapıştırın."></textarea>
+
+          <div class="options">
+            <div class="opt">
+              <div class="opt-head"><label for="speed">Konuşma hızı</label><output id="speed-val" for="speed" class="num">1,00×</output></div>
+              <input type="range" id="speed" min="0.8" max="1.4" step="0.05" value="1">
+              <div class="opt-scale" aria-hidden="true"><span>Yavaş</span><span>Normal</span><span>Hızlı</span></div>
+            </div>
+            <div class="opt">
+              <div class="opt-head"><span id="q-label">Ses kalitesi</span><span class="hint" id="q-hint"></span></div>
+              <div class="seg" role="radiogroup" aria-labelledby="q-label" id="quality">
+                <button type="button" role="radio" data-steps="4" aria-checked="false">Hızlı</button>
+                <button type="button" role="radio" data-steps="8" aria-checked="false">Dengeli</button>
+                <button type="button" role="radio" data-steps="16" aria-checked="true">En iyi</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="cta">
+            <div class="estimate" id="estimate" aria-live="polite">
+              <span class="est-item"><small>Ses süresi</small><strong id="est-audio" class="num">–</strong></span>
+              <span class="est-item"><small>Hazırlama</small><strong id="est-make" class="num">–</strong></span>
+            </div>
+            <button class="btn btn-primary btn-lg" id="go" type="button"><svg class="ic" aria-hidden="true"><use href="#i-wave"/></svg>Sese dönüştür</button>
+          </div>
+          <p class="form-msg" id="text-msg" role="alert" hidden></p>
+        </div>
+
+        <!-- 3: audio -->
+        <div class="panel" id="panel-audio" hidden>
+          <div class="gen" id="gen" data-state="running">
+            <div class="gen-pct" aria-hidden="true"><span id="gen-pct" class="num">0</span><small>%</small></div>
+            <div class="gen-body">
+              <p class="gen-title" id="gen-title">Ses üretiliyor</p>
+              <p class="gen-sub num" id="gen-sub">Başlıyor…</p>
+              <div class="bar" role="progressbar" aria-labelledby="gen-title" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="gen-bar"><i id="gen-fill"></i></div>
+            </div>
+            <div class="gen-actions">
+              <button class="btn btn-primary" id="listen-now" type="button" hidden><svg class="ic" aria-hidden="true"><use href="#i-play"/></svg>Dinlemeye başla</button>
+              <button class="btn btn-ghost" id="stop" type="button"><svg class="ic" aria-hidden="true"><use href="#i-stop"/></svg>Durdur</button>
+              <button class="btn btn-primary" id="resume" type="button" hidden><svg class="ic" aria-hidden="true"><use href="#i-play"/></svg>Devam et</button>
+            </div>
+          </div>
+
+          <div class="downloads" id="downloads" hidden>
+            <button class="dl" id="dl-mp3" type="button">
+              <svg class="ic" aria-hidden="true"><use href="#i-down"/></svg>
+              <span><strong>MP3 indir</strong><small id="dl-mp3-size">Küçük dosya, her cihazda çalar</small></span>
+            </button>
+            <button class="dl" id="dl-wav" type="button">
+              <svg class="ic" aria-hidden="true"><use href="#i-down"/></svg>
+              <span><strong>WAV indir</strong><small id="dl-wav-size">Kayıpsız, 48 kHz</small></span>
+            </button>
+          </div>
+
+          <div class="reader-head">
+            <h2 class="reader-title" id="reader-title">Metin</h2>
+            <p class="hint">Bir cümleye dokunun, oradan dinleyin.</p>
+          </div>
+          <article class="reader" id="reader" lang="tr" tabindex="0" aria-label="Seslendirilen metin"></article>
+
+          <div class="after-row">
+            <button class="btn btn-ghost" id="edit-again" type="button"><svg class="ic" aria-hidden="true"><use href="#i-edit"/></svg>Metni düzenle</button>
+            <button class="btn btn-ghost" id="new-doc" type="button"><svg class="ic" aria-hidden="true"><use href="#i-plus"/></svg>Yeni belge</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="how wrap" aria-labelledby="how-title">
+      <h2 id="how-title">Nasıl çalışır?</h2>
+      <ol class="how-grid">
+        <li>
+          <span class="how-num">01</span>
+          <h3>Belgeyi ayıklar</h3>
+          <p>PDF'lerde sütunları, satır sonunda bölünmüş kelimeleri, sayfa numaralarını ve üst bilgileri ayıklar. Taranmış sayfaları Türkçe OCR ile okur.</p>
+        </li>
+        <li>
+          <span class="how-num">02</span>
+          <h3>Okunuşa çevirir</h3>
+          <p>Tarih, saat, para ve sayıları yazıldığı gibi değil, okunduğu gibi söyler: “14.10.2026” olur “on dört Ekim iki bin yirmi altı”.</p>
+        </li>
+        <li>
+          <span class="how-num">03</span>
+          <h3>Sesi üretir</h3>
+          <p>Ahenk Cep modeli 48 kHz ses üretir. Kaç yüzde kaldığını ve kalan süreyi görürsünüz; hazır olan bölümleri hemen dinleyebilirsiniz.</p>
+        </li>
+      </ol>
+      <div class="notes">
+        <div class="note">
+          <svg class="ic" aria-hidden="true"><use href="#i-lock"/></svg>
+          <p><strong>Gizlilik.</strong> Dosyanız, metniniz ve ürettiğiniz ses hiçbir sunucuya gönderilmez. Sayfa yalnızca modeli ve gerekli kütüphaneleri indirir; model sonraki ziyaretlerde önbellekten açılır.</p>
+        </div>
+        <div class="note">
+          <svg class="ic" aria-hidden="true"><use href="#i-info"/></svg>
+          <p><strong>Bu ses yapaydır.</strong> Ahenk Cep'in sesi (f022) bir metin tarifinden tasarlandı; gerçek bir kişinin sesi ya da kaydı değildir. Paylaşırken yapay zekâ ile üretildiğini belirtin, kimseyi taklit etmek ya da yanıltmak için kullanmayın.</p>
+        </div>
+        <div class="note">
+          <svg class="ic" aria-hidden="true"><use href="#i-chip"/></svg>
+          <p><strong>Sınırlar.</strong> Tek bir kadın sesiyle, nötr tonda okur. Uzun belgeler zaman alır, telefonlarda daha da uzun: üretim sürerken sekmeyi açık tutun. Sonu yükselen sorular (“Yarın geliyorsun?”) yükselmez.</p>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="foot">
+    <div class="wrap foot-row">
+      <div>
+        <p class="foot-brand"><svg viewBox="0 0 32 32" aria-hidden="true"><use href="#i-mark"/></svg>Ahenk <em>Okur</em></p>
+        <p class="hint">Ses: <a id="link-cep" href="https://huggingface.co/ozgurguler/ahenk-cep-tr">Ahenk Cep</a> (CC BY 4.0), <a href="https://github.com/ozguradmin/ahenk-turkish-tts">Ahenk</a> · temel model <a href="https://huggingface.co/canberkkkkkk/ema-lightning">EMA Lightning</a> (Apache-2.0).</p>
+      </div>
+      <div class="foot-meta">
+        <p class="hint">Belge okuma <a href="https://mozilla.github.io/pdf.js/">pdf.js</a> ve <a href="https://tesseract.projectnaptha.com/">Tesseract</a>, model <a href="https://onnxruntime.ai/">onnxruntime-web</a> ve <a href="https://pyodide.org/">Pyodide</a> ile çalışır. <a id="link-github" href="https://github.com/ozguradmin/ahenk-cep-pdfreader">Kaynak kodu</a></p>
+        <p class="hint num" id="tech"></p>
+      </div>
+    </div>
+  </footer>
+
+  <!-- player: appears once there is audio -->
+  <div class="player" id="player" hidden>
+    <div class="player-inner">
+      <button class="pbtn pbtn-main" id="p-play" type="button" aria-label="Oynat">
+        <svg class="ic ic-play" aria-hidden="true"><use href="#i-play"/></svg>
+        <svg class="ic ic-pause" aria-hidden="true"><use href="#i-pause"/></svg>
+        <span class="pbtn-wait" aria-hidden="true"></span>
+      </button>
+      <div class="p-mid">
+        <div class="p-meta">
+          <span class="p-title" id="p-title">Belge</span>
+          <span class="p-time num" id="p-time">0:00 / 0:00</span>
+        </div>
+        <div class="p-wave" id="p-wave" role="slider" tabindex="0" aria-label="Konum" aria-valuemin="0" aria-valuemax="0" aria-valuenow="0" aria-valuetext="0:00">
+          <canvas aria-hidden="true"></canvas>
+        </div>
+      </div>
+      <div class="p-side">
+        <button class="pbtn" id="p-back" type="button" aria-label="15 saniye geri"><svg class="ic" aria-hidden="true"><use href="#i-back"/></svg></button>
+        <button class="pbtn" id="p-fwd" type="button" aria-label="15 saniye ileri"><svg class="ic" aria-hidden="true"><use href="#i-fwd"/></svg></button>
+        <button class="pbtn p-rate num" id="p-rate" type="button" aria-label="Dinleme hızı: 1×">1×</button>
+        <button class="pbtn" id="p-dl" type="button" aria-label="İndir" aria-haspopup="true" aria-expanded="false"><svg class="ic" aria-hidden="true"><use href="#i-down"/></svg></button>
+      </div>
+    </div>
+    <div class="p-menu" id="p-menu" hidden>
+      <button type="button" data-dl="mp3"><strong>MP3</strong><small id="pm-mp3">küçük dosya</small></button>
+      <button type="button" data-dl="wav"><strong>WAV</strong><small id="pm-wav">kayıpsız</small></button>
+      <p class="hint">Yapay zekâ ile üretilmiş ses.</p>
+    </div>
+  </div>
+
+  <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+
+  <div class="modal" id="modal" hidden>
+    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+      <h2 id="modal-title">MP3 hazırlanıyor</h2>
+      <p id="modal-sub" class="num">%0</p>
+      <div class="bar"><i id="modal-fill"></i></div>
+      <button class="btn btn-ghost btn-sm" id="modal-cancel" type="button">Vazgeç</button>
+    </div>
+  </div>
+
+  <script type="module" src="js/app.js"></script>
+  <script nomodule>
+    document.getElementById('model-title').textContent = 'Tarayıcınız bu sayfayı çalıştıramıyor';
+    document.getElementById('model-sub').textContent = 'Güncel bir Chrome, Safari, Firefox ya da Edge ile açmayı deneyin.';
+  </script>
+  <script>
+    // If js/app.js or one of its imports could not load or run, nothing on the page would answer: say so.
+    window.addEventListener('load', () => {
+      if (window.ahenkStarted || !('noModule' in HTMLScriptElement.prototype)) return;
+      document.getElementById('model').classList.add('is-error');
+      document.getElementById('model-title').textContent = 'Sayfa tam yüklenemedi';
+      document.getElementById('model-sub').textContent = 'Sayfayı yenileyip tekrar deneyin.';
+    });
+  </script>
+</body>
+</html>

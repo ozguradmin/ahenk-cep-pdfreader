@@ -1,0 +1,77 @@
+# Ahenk Okur
+
+PDF, Word, EPUB ve metin belgelerini **tarayıcıda** Türkçe sese dönüştüren site. Ses,
+[Ahenk Cep](https://huggingface.co/ozgurguler/ahenk-cep-tr) modeliyle (8,6 M parametre, 48 kHz) ziyaretçinin kendi
+cihazında üretilir; dosya da metin de hiçbir sunucuya gitmez.
+
+**Adres:** https://ozguradmin.github.io/ahenk-cep-pdfreader/
+
+## Ne yapar
+
+1. **Belge.** PDF, DOCX, ODT, EPUB, TXT, Markdown, HTML ya da bir sayfa fotoğrafı yüklenir (sürükle-bırak ya da
+   seç); metin yapıştırmak da olur.
+   - PDF'lerde satırlar, sütunlar ve paragraflar yeniden kurulur; satır sonunda bölünmüş kelimeler birleştirilir;
+     tekrarlayan üst/alt bilgiler ve sayfa numaraları atılır; eski yazı tiplerinin ý/þ/ð hatası ı/ş/ğ'ye çevrilir.
+   - Taranmış ya da metni bozuk PDF'ler ve görseller Türkçe OCR ile (Tesseract) okunur.
+   - Uzun PDF'lerde sayfa aralığı seçilebilir; parolalı PDF'ler parola sorar.
+2. **Metin.** Ayıklanan metin düzenlenebilir. Konuşma hızı (0,8×–1,4×) ve kalite (4 / 8 / 16 adım) seçilir; ses
+   süresi ve bu cihazda ne kadar süreceği tahmin edilir.
+3. **Ses.** Metin cümle cümle seslendirilir: yüzde, cümle sayısı ve kalan süre canlı görünür. Hazır olan kısım hemen
+   dinlenebilir; okunan cümle metinde işaretlenir, bir cümleye dokununca oradan çalar. Durdurulup kaldığı yerden
+   devam ettirilebilir. Bitince **MP3** (64 kbit/s) ya da **WAV** (48 kHz, kayıpsız) indirilir. Dosyalara “yapay
+   zekâ ile üretilmiş ses” notu yazılır.
+
+Model sayfa açılır açılmaz kendiliğinden yüklenir (ilk ziyarette ~17 MB, sonra önbellekten); ilerlemesi yüzde olarak
+gösterilir. Telefonlarda ekran üretim boyunca açık tutulur (Wake Lock), kilit ekranından oynatıcı denetlenebilir
+(Media Session).
+
+## Nasıl çalışır
+
+| Parça | Dosya |
+|---|---|
+| Sayfa, adımlar, ilerleme, indirme | `site/index.html`, `site/css/style.css`, `site/js/app.js` |
+| Belge okuma (pdf.js, DOCX/ODT/EPUB XML'i, metin kodlaması) | `site/js/extract.js` |
+| PDF düzeni, metin temizliği, cümlelere bölme (DOM'suz, Node'da test edilir) | `site/js/text.js` |
+| OCR (tesseract.js, yalnızca gerektiğinde yüklenir) | `site/js/ocr.js` |
+| Model: indirme + sha256 + önbellek, iş parçacıkları, bölüm bölüm sentez, iptal | `site/js/worker.js` |
+| Ahenk Cep'in örnekleme döngüsü, arka uç seçimi, trnorm ön ucu, torch.randn | `site/js/engine.js`, `backend.js`, `front.js`, `randn.js`, `site/py/` |
+| Oynatıcı (üretilirken dinleme, dalga biçimi, kilit ekranı) | `site/js/player.js` |
+| WAV ve MP3 (lamejs, ayrı worker'da) | `site/js/wav.js`, `site/js/mp3.js` |
+| GitHub Pages'te çapraz köken yalıtımı (çok iş parçacıklı WebAssembly için) | `site/coi-serviceworker.js` |
+
+Motor, [ahenk-turkish-tts](https://github.com/ozguradmin/ahenk-turkish-tts) deposundaki tarayıcı demosundan
+alındı (`site/js/engine.js` vb., Apache-2.0); orada PyTorch'la birebir karşılaştırılmıştır. Bu depoda eklenenler:
+uzun belgeler için bölüm bölüm sentez, iptal ve devam, üretilirken dinleme, belge okuma ve OCR.
+
+Model dosyaları depoda değildir: sayfa onları Hugging Face model deposundan (`onnx/`, f16, sha256 denetimli) indirir
+ve Cache Storage'a koyar. Aynı adresteki (`ozguradmin.github.io`) Ahenk Cep demosu da aynı önbellek adını kullanır;
+birinde inen model ötekinde yeniden inmez. İki site birbirinin ayarına ya da servis çalışanına dokunmaz.
+
+Kütüphaneler jsdelivr'den, sabit sürümle gelir (`site/js/config.js`): onnxruntime-web 1.30.0, Pyodide 0.27.7,
+pdf.js 5.7.284 (legacy derleme), fflate 0.8.2, lamejs 1.2.7, tesseract.js 7.0.0.
+
+Adres satırı seçenekleri: `?variant=fp32|f16|int8`, `?ep=wasm|webgpu`.
+
+## Yerelde açmak
+
+```bash
+python3 tools/serve.py --isolate     # http://127.0.0.1:8000/  (çok iş parçacıklı)
+python3 tools/serve.py               # GitHub Pages'in sunduğu gibi, başlıksız
+npm test                             # metin işleme testleri (node --test)
+```
+
+## Yayınlama
+
+`.github/workflows/pages.yml`, varsayılan dala yapılan her gönderimde testleri çalıştırıp `site/` klasörünü GitHub
+Pages'e yayınlar. Bir kerelik ayar: **Settings → Pages → Build and deployment → Source: GitHub Actions**.
+
+Cloudflare Pages'e de aynı klasör olduğu gibi konabilir (`wrangler pages deploy site --project-name ahenk-okur`);
+ancak bazı Türk internet sağlayıcıları `*.pages.dev` adreslerini engelliyor, bu yüzden ana adres GitHub Pages.
+
+## Lisans ve atıf
+
+Kod Apache-2.0 (`LICENSE`); üçüncü taraf parçalar ve atıflar `NOTICE` dosyasında. Ses modeli Ahenk Cep,
+CC BY 4.0: “Ahenk Cep, Ahenk (https://github.com/ozguradmin/ahenk-turkish-tts), CC BY 4.0”.
+
+**Bu ses yapaydır.** Ahenk Cep'in sesi (f022) bir metin tarifinden tasarlandı, gerçek bir kişi değildir. Ürettiğiniz
+sesi paylaşırken yapay zekâ ile üretildiğini belirtin; kimseyi taklit etmek ya da yanıltmak için kullanmayın.

@@ -1,0 +1,47 @@
+Ahenk Okur (ahenk-cep-pdfreader)
+
+This product's own code is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+-------------------------------------------------------------------------------
+Code included in this repository from other projects
+-------------------------------------------------------------------------------
+
+- site/js/engine.js, site/js/backend.js, site/js/front.js, site/js/randn.js, site/js/wav.js, the loading half of
+  site/js/worker.js, site/py/ (ahenk_front.py and trnorm/), and the loading logic in site/js/app.js
+  ahenk-turkish-tts, Copyright 2026 Özgür Güler, https://github.com/ozguradmin/ahenk-turkish-tts, Apache-2.0.
+  Changes: engine.js can be cancelled between Euler steps and awaits its progress callback; wav.js builds a WAV
+  from several Int16 parts; worker.js speaks a document segment by segment. site/py/ahenk_front.py contains parts of
+  EMA Lightning 1.1.2 (canberkkkkkk/ema-lightning, Apache-2.0).
+
+- site/coi-serviceworker.js
+  coi-serviceworker, Guido Zuidhof and contributors, MIT (see site/coi-serviceworker.LICENSE).
+
+-------------------------------------------------------------------------------
+Libraries loaded at run time (not included; from cdn.jsdelivr.net, exact versions in site/js/config.js)
+-------------------------------------------------------------------------------
+
+- onnxruntime-web (Microsoft, MIT)
+- Pyodide (Mozilla and contributors, MPL-2.0)
+- PDF.js / pdfjs-dist (Mozilla, Apache-2.0)
+- fflate (Arjun Barrett, MIT)
+- lamejs / @breezystack/lamejs (LGPL-3.0)
+- tesseract.js and tesseract.js-core (Apache-2.0), Turkish traineddata from tesseract-ocr/tessdata (Apache-2.0)
+- Newsreader and Hanken Grotesk fonts through Fontsource (SIL Open Font License 1.1)
+
+-------------------------------------------------------------------------------
+Model (not included; downloaded at run time from Hugging Face)
+-------------------------------------------------------------------------------
+
+Ahenk Cep (https://huggingface.co/ozgurguler/ahenk-cep-tr), weights CC BY 4.0.
+"Ahenk Cep, Ahenk (https://github.com/ozguradmin/ahenk-turkish-tts), CC BY 4.0."
+It derives from EMA Lightning (https://huggingface.co/canberkkkkkk/ema-lightning), Apache-2.0, and learned from the
+voice of Ahenk, trained with Alania Turkish Synthetic Speech by PatientDesk AI
+(https://huggingface.co/datasets/cloud0day3/alania-synthetic-speech-tr) and Alania Turkish Domain Text by
+PatientDesk AI (https://huggingface.co/datasets/cloud0day3/alania-domain-text-tr), licensed under CC BY 4.0.
+
+-------------------------------------------------------------------------------
+Synthetic speech
+-------------------------------------------------------------------------------
+
+Speech produced with this site is synthetic. Disclose that it is AI-generated wherever a listener could be misled
+(EU AI Act, Article 50), and do not use it to impersonate any real person.
