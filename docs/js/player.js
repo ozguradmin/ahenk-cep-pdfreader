@@ -24,25 +24,38 @@ export class Track {
     this.mp3 = [];
     this.tail = null; // the encoder's last bytes, after the job
     this.offsets = [0];
-    this.peaks = [];
+    this.peaks = new Uint8Array(4096); // 0-255, one per PEAK_S; this.npeaks used
+    this.npeaks = 0;
     this.made = 0; // segments whose samples have arrived
     this.count = 0; // segments that can be played, from the start
   }
 
-  // a segment's samples, in order
+  pushPeaks(p) {
+    if (this.npeaks + p.length > this.peaks.length) {
+      const grown = new Uint8Array(Math.max(this.peaks.length * 2, this.npeaks + p.length));
+      grown.set(this.peaks.subarray(0, this.npeaks));
+      this.peaks = grown;
+    }
+    this.peaks.set(p, this.npeaks);
+    this.npeaks += p.length;
+  }
+
+  // a segment's samples, in order -> its waveform peaks (kept with the segment on disk)
   addPcm(index, pcm) {
     if (index !== this.made) throw new Error(`segment ${index} out of order (have ${this.made})`);
     this.offsets.push(this.offsets[this.made] + pcm.length);
     const step = Math.round(this.sr * PEAK_S);
-    for (let i = 0; i < pcm.length; i += step) {
+    const peaks = new Uint8Array(Math.ceil(pcm.length / step));
+    for (let i = 0, j = 0; i < pcm.length; i += step, j++) {
       let m = 0;
       const e = Math.min(pcm.length, i + step);
       for (let k = i; k < e; k += 4) {
         const v = pcm[k] < 0 ? -pcm[k] : pcm[k];
         if (v > m) m = v;
       }
-      this.peaks.push(m / 32768);
+      peaks[j] = Math.round((m / 32768) * 255);
     }
+    this.pushPeaks(peaks);
     this.made += 1;
     if (this.wavOk && this.offsets[this.made] / this.sr > this.keepPcm && this.mode === 'mp3') {
       this.wavOk = false;
@@ -50,6 +63,27 @@ export class Track {
     }
     if (this.wavOk) this.pcm.push(new Blob([pcm]));
     if (this.mode === 'wav') this.count = this.made;
+    return peaks;
+  }
+
+  // A job read back from disk: rows {mp3, samples, peaks} in order. Its PCM is gone, so no WAV.
+  static restore(sampleRate, rows) {
+    const t = new Track(sampleRate, { keepPcm: 0 });
+    t.wavOk = false;
+    t.restored = true;
+    for (const r of rows) {
+      t.offsets.push(t.offsets[t.made] + r.samples);
+      if (r.peaks) t.pushPeaks(r.peaks);
+      t.mp3.push(r.mp3);
+      t.made += 1;
+    }
+    t.count = t.made;
+    return t;
+  }
+
+  // the same bytes, now held on disk
+  swapMp3(index, blob) {
+    if (blob && index < this.mp3.length) this.mp3[index] = blob;
   }
 
   // a segment's MP3 bytes, in order
@@ -458,7 +492,8 @@ export class Player {
     const n = Math.floor(W / (bar + gap));
     const ready = tr ? tr.duration / scale : 0;
     const mid = H / 2;
-    const peaks = tr ? tr.peaks : [];
+    const peaks = tr ? tr.peaks : new Uint8Array(0);
+    const np = tr ? tr.npeaks : 0;
     const perBar = (scale / PEAK_S) / n;
     for (let k = 0; k < n; k++) {
       const x = k * (bar + gap);
@@ -473,7 +508,8 @@ export class Player {
       const a = Math.floor(k * perBar);
       const b = Math.max(a + 1, Math.floor((k + 1) * perBar));
       let m = 0;
-      for (let j = a; j < b && j < peaks.length; j += Math.max(1, Math.floor((b - a) / 8))) m = Math.max(m, peaks[j]);
+      for (let j = a; j < b && j < np; j += Math.max(1, Math.floor((b - a) / 8))) m = Math.max(m, peaks[j]);
+      m /= 255;
       const h = Math.max(2, Math.min(H, Math.pow(m, 0.6) * H * 1.15));
       g.fillStyle = f0 <= t / scale ? accent : muted;
       g.globalAlpha = f0 <= t / scale ? 1 : 0.5;

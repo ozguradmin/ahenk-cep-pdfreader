@@ -10,6 +10,7 @@ import { deviceInfo, shortError } from './backend.js';
 import { LINKS, pageOptions } from './config.js';
 import { ExtractError, extractFile } from './extract.js';
 import { Player, Track, fmtTime } from './player.js';
+import { openStore, storageUse } from './storage.js';
 import { blocksToText, countWords, parseEditor, segment, speechSeconds, splitParts, spokenChars } from './text.js';
 import { id3 } from './wav.js';
 
@@ -67,14 +68,17 @@ const state = {
   // last measured speed of this device: {rtf, steps}
   measured: null,
   downloaded: false,
+  store: null, // js/storage.js, when this browser keeps data (IndexedDB)
 };
 let job = null;
 let track = null;
 let nextId = 1;
 
-// How much one job may hold. A part of a long document is at most PART_S seconds of speech (its MP3 stays in
-// memory: about 29 MB an hour); the WAV is offered while the speech is at most WAV_S seconds (345 MB an hour).
-const PART_S = device.mobile ? 2 * 3600 : 6 * 3600;
+// How much one job may hold. With storage on the device the MP3 goes to disk as it is made, so a whole book is one
+// job (60 hours is only a sanity limit). Without it the MP3 stays in memory (about 29 MB an hour), and a long
+// document is made in parts of at most 6 hours (2 on a phone). The WAV is offered while the speech is at most WAV_S
+// seconds (345 MB an hour of PCM, kept in memory).
+const partLimit = () => (state.store ? 60 : device.mobile ? 2 : 6) * 3600;
 const WAV_S = device.mobile ? 10 * 60 : 30 * 60;
 
 // ---- theme ------------------------------------------------------------------------------------------------------------
@@ -569,7 +573,7 @@ function rangeBlocks() {
 
 // A document longer than PART_S seconds of speech is made part by part: the editor holds the chosen part.
 function fillEditor() {
-  const parts = splitParts(rangeBlocks(), PART_S * 14);
+  const parts = splitParts(rangeBlocks(), partLimit() * 14);
   state.parts = parts;
   state.part = Math.min(state.part || 0, Math.max(0, parts.length - 1));
   const sel = $('part');
@@ -585,7 +589,7 @@ function fillEditor() {
     });
     sel.value = String(state.part);
     const all = parts.reduce((n, p) => n + p.chars, 0);
-    $('parts-note').textContent = `Belge uzun (${dur(speechSeconds(all, state.speed), { approx: true })} ses). Bu cihazda bir seferde en çok ${PART_S / 3600} saatlik bir bölüm dönüştürülür; bölümleri sırayla dönüştürüp ayrı ayrı indirebilirsiniz.`;
+    $('parts-note').textContent = `Belge uzun (${dur(speechSeconds(all, state.speed), { approx: true })} ses). Bu cihazda bir seferde en çok ${partLimit() / 3600} saatlik bir bölüm dönüştürülür; bölümleri sırayla dönüştürüp ayrı ayrı indirebilirsiniz.`;
   }
   $('editor').value = blocksToText(parts.length ? parts[state.part].blocks : []);
   state.edited = false;
@@ -719,7 +723,17 @@ function renderEstimate() {
   const audio = speechSeconds(chars + 2.5 * digits, state.speed);
   $('est-audio').textContent = chars ? dur(audio, { approx: true }) : '–';
   $('est-make').textContent = chars ? dur(audio * rtf(state.steps), { approx: true }) : '–';
+  // A long job at the best quality: say what "Dengeli" (8 steps) would save. The choice stays the visitor's; the
+  // model card measures the difference as small (UTMOS 3.44 at 16 steps, 3.30 at 8, the same word error rate).
+  const saved = audio * (rtf(16) - rtf(8));
+  const tip = state.steps === 16 && saved > 10 * 60;
+  $('est-tip').hidden = !tip;
+  if (tip) $('est-tip-text').textContent = `“Dengeli” kalite bu belgeyi ${dur(saved, { approx: true }).replace('≈ ', 'yaklaşık ')} daha kısa sürede hazırlar; ses neredeyse aynı kalır.`;
 }
+$('est-tip-btn').addEventListener('click', () => {
+  setSteps(8);
+  store('ahenk-okur-steps', '8');
+});
 
 const speed = $('speed');
 function setSpeed(v) {
@@ -766,9 +780,37 @@ editor.addEventListener('keydown', (e) => {
 });
 
 // ---- the job ---------------------------------------------------------------------------------------------------------------------------
-function startJob({ confirmed = false } = {}) {
+// A book-length text is cut into segments a slice at a time, so the page stays responsive while it is prepared.
+async function segmentAll(blocks) {
+  const SLICE = 300;
+  if (blocks.length <= SLICE) return segment(blocks);
+  const out = [];
+  for (let i = 0; i < blocks.length; i += SLICE) {
+    const part = segment(blocks.slice(i, i + SLICE), 40, i, i + SLICE >= blocks.length);
+    for (const x of part) out.push(x);
+    $('go-label').textContent = `Metin hazırlanıyor… %${Math.floor((100 * Math.min(blocks.length, i + SLICE)) / blocks.length)}`;
+    await new Promise((r) => { setTimeout(r, 0); });
+  }
+  return out;
+}
+
+let preparing = false;
+async function startJob(opts = {}) {
+  if (preparing) return;
+  preparing = true;
+  $('go').disabled = true;
+  try {
+    await startJobNow(opts);
+  } finally {
+    preparing = false;
+    $('go').disabled = false;
+    $('go-label').textContent = 'Sese dönüştür';
+  }
+}
+
+async function startJobNow({ confirmed = false } = {}) {
   const blocks = parseEditor(editor.value);
-  const segs = segment(blocks);
+  const segs = await segmentAll(blocks);
   if (!segs.length) {
     $('text-msg').textContent = 'Önce seslendirilecek bir metin yazın ya da bir belge yükleyin.';
     $('text-msg').hidden = false;
@@ -797,6 +839,7 @@ function startJob({ confirmed = false } = {}) {
     expected: speechSeconds(chars, state.speed), t0: performance.now(), failed: new Set(), partNo, parts: parts.length,
     name: partNo ? `${docName} · Bölüm ${partNo}/${parts.length}` : docName,
     file: partNo ? `${base} - Bölüm ${String(partNo).padStart(2, '0')}` : base,
+    pending: new Map(), sid: null, saving: Promise.resolve(), savedAt: 0,
   };
   state.downloaded = false;
   // the PDF itself is not needed while speaking (the text is out): free what pdf.js holds
@@ -805,6 +848,8 @@ function startJob({ confirmed = false } = {}) {
     $('ocr-offer').hidden = true;
   }
   track = new Track((state.info && state.info.sampleRate) || 48000, { keepPcm: WAV_S });
+  job.track = track;
+  persistNewJob(job);
   startEncoder(job.id, track);
   listened = false;
   renderReader(blocks, segs);
@@ -819,8 +864,9 @@ function startJob({ confirmed = false } = {}) {
   renderJob();
 }
 
+// A finished job that is saved on the device stays in "Kaydedilen dönüştürmeler": nothing to lose then.
 function confirmReplace() {
-  return !(track && track.count && !state.downloaded && job && job.state === 'done')
+  return !(track && track.count && !state.downloaded && job && job.state === 'done' && !job.sid)
     || window.confirm('Önceki ses henüz indirilmedi. Yeni dönüştürme onun yerini alacak. Devam edilsin mi?');
 }
 
@@ -834,6 +880,7 @@ $('next-part').addEventListener('click', () => {
 
 function sendJob() {
   if (!job || !worker) return;
+  if (track.mode === 'mp3' && (!encoder || encoder.tr !== track)) startEncoder(job.id, track);
   job.state = 'running';
   job.runT0 = performance.now();
   job.runW0 = job.doneW;
@@ -852,7 +899,8 @@ function sendJob() {
 function onSegment(data) {
   const i = data.index;
   if (i !== track.made) return; // a late message from before a restart
-  track.addPcm(i, data.pcm);
+  const peaks = track.addPcm(i, data.pcm);
+  job.pending.set(i, { samples: data.pcm.length, peaks, failed: !!data.failed });
   if (data.failed) job.failed.add(i);
   job.ready = i + 1;
   job.doneW += job.weights[i];
@@ -871,7 +919,10 @@ function onSegment(data) {
 function onPlayable(from = track.count - 1) {
   for (let i = Math.max(0, from); i < track.count; i++) markReady(i);
   const active = job && ['running', 'waiting', 'resuming', 'stopping'].includes(job.state);
-  if (!active && track.count === track.made) player.finished();
+  if (!active && track.count === track.made) {
+    player.finished();
+    saveProgress(job, true); // the last MP3 bytes came after the job ended: the saved length is now complete
+  }
   if (track.count && $('player').hidden) {
     showPlayer(true);
     if (player.audio.paused) $('listen-now').hidden = false;
@@ -898,6 +949,7 @@ function startEncoder(id, tr) {
     if (data.type === 'chunk') {
       if (data.index !== tr.count) return;
       tr.addMp3(data.index, data.bytes);
+      if (job && job.id === id) persistChunk(job, tr, data.index);
       onPlayable();
     } else if (data.type === 'finished') {
       tr.finish(data.bytes);
@@ -924,10 +976,64 @@ function encoderFailed(tr) {
   else toast('MP3 dönüştürücü yüklenemedi; bu uzunlukta ses saklanamıyor. Sayfayı yenileyip tekrar deneyin.', 7000);
 }
 
+// ---- keeping the job on the device (js/storage.js) ----
+// The text once, each segment's MP3 as it is encoded, the progress every few seconds. A tab that closes or crashes
+// loses at most the segments being made; "Kaydedilen dönüştürmeler" opens the job again and goes on from there.
+function persistNewJob(j) {
+  const st = state.store;
+  if (!st) return;
+  j.sid = `j${Date.now().toString(36)}${Math.floor(Math.random() * 1e6).toString(36)}`;
+  const meta = jobMeta(j);
+  j.saving = st.saveJob({ ...meta, created: Date.now() }, j.segs.map((x) => ({ text: x.text, speak: x.speak, pause: x.pause, block: x.block, heading: x.heading })))
+    .then(() => st.prune(j.sid))
+    .catch((e) => storageFailed(j, e));
+}
+
+// j.track, not the page's current track: a save still queued for an earlier job must describe that job
+function jobMeta(j) {
+  const t = j.track;
+  return {
+    id: j.sid, name: j.name, file: j.file, steps: j.steps, speed: j.speed, n: j.segs.length, expected: j.expected,
+    made: t ? t.count : 0, seconds: t ? t.duration : 0,
+    state: j.state === 'done' ? 'done' : 'stopped', synthMs: j.synthMs, downloaded: state.downloaded,
+  };
+}
+
+function persistChunk(j, tr, i) {
+  const p = j.pending.get(i);
+  j.pending.delete(i);
+  if (!j.sid || !state.store || !p) return;
+  const blob = tr.mp3[i];
+  j.saving = j.saving.then(async () => {
+    if (!j.sid) return;
+    const stored = await state.store.putChunk(j.sid, i, { mp3: blob, samples: p.samples, peaks: p.peaks, failed: p.failed });
+    if (tr === track) tr.swapMp3(i, stored); // the in-memory copy can go
+  }).catch((e) => storageFailed(j, e));
+  saveProgress(j);
+}
+
+// the progress record: every 5 seconds while working, and at once when the job stops or ends
+function saveProgress(j, now = false) {
+  if (!j.sid || !state.store) return;
+  if (!now && performance.now() - j.savedAt < 5000) return;
+  j.savedAt = performance.now();
+  j.saving = j.saving.then(() => (j.sid ? state.store.patchJob(j.sid, jobMeta(j)) : null)).catch((e) => storageFailed(j, e));
+}
+
+function storageFailed(j, e) {
+  console.warn('Ahenk Okur: could not save to the device', e);
+  if (!j.sid) return;
+  j.sid = null;
+  const full = e && (e.name === 'QuotaExceededError' || /quota/i.test(String(e.message)));
+  toast(full ? 'Cihazda yer kalmadı: ses bundan sonra yalnızca bu sekmede tutuluyor. İşiniz bitince indirmeyi unutmayın.'
+    : 'Ses bu cihaza kaydedilemiyor; yalnızca bu sekmede tutuluyor.', 7000);
+}
+
 function finishJob(how) {
   if (!job) return;
   job.state = how;
   keepAwake(false);
+  saveProgress(job, true);
   if (how === 'done' && track.madeDuration > 1) {
     state.measured = { rtf: job.synthMs / 1000 / track.madeDuration, steps: job.steps };
     store('ahenk-okur-rtf', JSON.stringify(state.measured));
@@ -1090,7 +1196,8 @@ function renderJob() {
     $('dl-mp3').disabled = !mp3;
     $('dl-wav').disabled = !track.wavOk;
     $('dl-mp3-size').textContent = mp3 ? `${mb(track.mp3Bytes)} · her cihazda çalar${partial}` : 'hazırlanamadı';
-    $('dl-wav-size').textContent = track.wavOk ? `${mb(track.wavBytes)} · kayıpsız, 48 kHz${partial}` : `${WAV_S / 60} dakikadan uzun seslerde yok (çok büyük olurdu)`;
+    $('dl-wav-size').textContent = track.wavOk ? `${mb(track.wavBytes)} · kayıpsız, 48 kHz${partial}`
+      : track.restored ? 'kayıttan açılan seste yok (yalnızca MP3 saklanır)' : `${WAV_S / 60} dakikadan uzun seslerde yok (çok büyük olurdu)`;
     $('pm-mp3').textContent = mp3 ? mb(track.mp3Bytes) : '–';
     $('pm-wav').textContent = track.wavOk ? mb(track.wavBytes) : 'çok uzun';
   }
@@ -1293,13 +1400,15 @@ function save(blob, name) {
   a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 120000);
   state.downloaded = true;
+  if (job && job.sid && state.store) state.store.patchJob(job.sid, { downloaded: true }).catch(() => {});
 }
 
 function downloadWav() {
   if (!track || !track.made) return;
   const blob = track.wav(WAV_INFO);
   if (!blob) {
-    toast(`WAV yalnızca ${WAV_S / 60} dakikaya kadar olan seslerde sunulur (bu ses ${mb(track.wavBytes)} olurdu). MP3'ü indirin.`, 6000);
+    toast(track.restored ? 'Kayıttan açılan seste yalnızca MP3 var.'
+      : `WAV yalnızca ${WAV_S / 60} dakikaya kadar olan seslerde sunulur (bu ses ${mb(track.wavBytes)} olurdu). MP3'ü indirin.`, 6000);
     return;
   }
   save(blob, `${baseName()}.wav`);
@@ -1347,6 +1456,150 @@ document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') menu.hidden = true;
 });
 
+// ---- saved jobs ("Kaydedilen dönüştürmeler") -------------------------------------------------------------------------------------------
+const relTime = (() => {
+  try {
+    return new Intl.RelativeTimeFormat('tr', { numeric: 'auto' });
+  } catch {
+    return null;
+  }
+})();
+function ago(t) {
+  const s = (t - Date.now()) / 1000;
+  if (!relTime) return '';
+  if (Math.abs(s) < 3600) return relTime.format(Math.round(s / 60), 'minute');
+  if (Math.abs(s) < 86400) return relTime.format(Math.round(s / 3600), 'hour');
+  return relTime.format(Math.round(s / 86400), 'day');
+}
+
+async function renderSaved() {
+  const box = $('saved');
+  if (!state.store) {
+    box.hidden = true;
+    return;
+  }
+  let jobs = [];
+  try {
+    jobs = await state.store.jobs();
+  } catch { /* nothing to show */ }
+  box.hidden = !jobs.length;
+  const ul = $('saved-list');
+  ul.textContent = '';
+  for (const m of jobs) {
+    const li = document.createElement('li');
+    const done = m.state === 'done';
+    const pct = m.n ? Math.floor((100 * m.made) / m.n) : 0;
+    const main = document.createElement('div');
+    main.className = 'sv-main';
+    const name = document.createElement('strong');
+    name.textContent = m.name;
+    const sub = document.createElement('span');
+    sub.className = 'num';
+    sub.textContent = [done ? 'Hazır' : `%${pct} hazır`, m.seconds ? `${dur(m.seconds)} ses` : '', ago(m.updated)].filter(Boolean).join(' · ');
+    main.append(name, sub);
+    const open = document.createElement('button');
+    open.type = 'button';
+    open.className = 'btn btn-sm ' + (done ? 'btn-ghost' : 'btn-primary');
+    open.textContent = done ? 'Aç' : 'Devam et';
+    open.addEventListener('click', () => openSaved(m.id, !done));
+    const del = document.createElement('button');
+    del.type = 'button';
+    del.className = 'icon-btn sv-del';
+    del.setAttribute('aria-label', `Sil: ${m.name}`);
+    del.innerHTML = '<svg class="ic" aria-hidden="true"><use href="#i-x"/></svg>';
+    del.addEventListener('click', async () => {
+      if (!window.confirm(`“${m.name}” bu cihazdan silinsin mi?`)) return;
+      if (job && job.sid === m.id) job.sid = null;
+      await state.store.deleteJob(m.id).catch(() => {});
+      renderSaved();
+    });
+    li.append(main, open, del);
+    ul.appendChild(li);
+  }
+  const use = await storageUse();
+  $('saved-note').textContent = use && use.usage ? `Bu cihazda saklanır (${mb(use.usage)}). Son ${3} dönüştürme tutulur.` : 'Bu cihazda saklanır. Son 3 dönüştürme tutulur.';
+}
+
+// A saved job back on the page: its text, its audio (from disk) and where the listener was; `go` goes on making it.
+async function openSaved(id, go) {
+  if (!confirmDiscard()) return;
+  if (job && job.sid === id && track) {
+    show(3);
+    scrollToStudio();
+    if (go && job.state !== 'done') $('resume').click();
+    return;
+  }
+  let meta;
+  let segs;
+  let rows;
+  try {
+    meta = (await state.store.jobs()).find((x) => x.id === id);
+    [segs, rows] = await Promise.all([state.store.text(id), state.store.chunks(id)]);
+  } catch (e) {
+    console.error(e);
+  }
+  if (!meta || !segs) {
+    toast('Bu kayıt açılamadı.', 5000);
+    return;
+  }
+  // rows are kept in order from 0; a gap (a write that did not land) ends what can be used
+  let n = 0;
+  while (n < rows.length && rows[n].index === n) n++;
+  rows = rows.slice(0, n);
+  if (encoder) encoder.w.terminate();
+  encoder = null;
+  const weights = segs.map((x) => spokenChars(x.speak) + 4);
+  track = Track.restore((state.info && state.info.sampleRate) || 48000, rows);
+  job = {
+    id: nextId++, segs, blocks: null, weights, total: weights.reduce((a, b) => a + b, 0),
+    doneW: weights.slice(0, n).reduce((a, b) => a + b, 0), ready: n, cur: n, curFrac: 0,
+    steps: meta.steps, speed: meta.speed, state: n >= segs.length ? 'done' : 'stopped', retries: 0, runT0: 0, runW0: 0,
+    synthMs: meta.synthMs || 0, error: '', expected: meta.expected || track.duration, t0: performance.now(),
+    failed: new Set(rows.filter((r) => r.failed).map((r) => r.index)), partNo: 0, parts: 0, name: meta.name, file: meta.file,
+    pending: new Map(), sid: id, saving: Promise.resolve(), savedAt: 0, track,
+  };
+  state.downloaded = !!meta.downloaded;
+  // the editor gets the text back, for "Metni düzenle"
+  const blocks = [];
+  for (const x of segs) {
+    if (!blocks[x.block]) blocks[x.block] = { text: x.text, heading: x.heading };
+    else blocks[x.block].text += ` ${x.text}`;
+  }
+  state.doc = { name: meta.name, kind: 'txt', blocks: blocks.filter(Boolean), pages: null };
+  state.part = 0;
+  fillEditor();
+  listened = false;
+  renderReader(null, segs);
+  $('reader-title').textContent = job.name;
+  player.load(track, { title: job.name, expected: job.state === 'done' ? track.duration : Math.max(track.duration, job.expected) });
+  if (job.state === 'done') player.finished();
+  show(3);
+  scrollToStudio();
+  if (track.count) {
+    showPlayer(true);
+    const at = Math.min(meta.position || 0, Math.max(0, track.duration - 1));
+    player.seek(at);
+    showPage(pageOf(Math.max(0, track.at(at))));
+  }
+  renderJob();
+  if (go && job.state !== 'done') $('resume').click();
+}
+
+// where the listener is, so that opening the job again starts there
+let posAt = 0;
+function savePosition(force = false) {
+  if (!job || !job.sid || !state.store || !track || !track.count) return;
+  const now = performance.now();
+  if (!force && now - posAt < 2000) return;
+  posAt = now;
+  state.store.patchJob(job.sid, { position: player.time() }).catch(() => {});
+}
+player.audio.addEventListener('timeupdate', () => savePosition());
+player.audio.addEventListener('pause', () => savePosition(true));
+// a tab that is hidden may never come back (phones discard it): save then
+document.addEventListener('visibilitychange', () => { if (document.hidden) savePosition(true); });
+window.addEventListener('pagehide', () => savePosition(true));
+
 // ---- back and forth ----------------------------------------------------------------------------------------------------------------------
 $('edit-again').addEventListener('click', () => {
   if (!confirmDiscard()) return;
@@ -1356,6 +1609,7 @@ $('edit-again').addEventListener('click', () => {
 $('new-doc').addEventListener('click', () => {
   if (!confirmDiscard()) return;
   show(1);
+  renderSaved();
   scrollToStudio();
 });
 
@@ -1375,8 +1629,10 @@ async function keepAwake(on) {
 }
 
 window.addEventListener('beforeunload', (e) => {
+  // with the job saved on the device, leaving only pauses it; without, the audio would be gone
   const busy = job && ['running', 'waiting', 'resuming', 'stopping'].includes(job.state);
-  if (busy || (track && track.count && !state.downloaded)) {
+  const saved = job && job.sid;
+  if ((busy && !saved) || (track && track.count && !state.downloaded && !saved)) {
     e.preventDefault();
     e.returnValue = '';
   }
@@ -1397,5 +1653,9 @@ renderModel();
 renderTheme();
 matchMedia('(prefers-color-scheme: dark)').addEventListener?.('change', renderTheme);
 afterCoiReload().then(startWorker);
+openStore().then((st) => {
+  state.store = st;
+  renderSaved();
+});
 window.ahenkStarted = true; // index.html says the page did not load if this never runs
 window.__ahenkOkur = { state, get job() { return job; }, get track() { return track; }, player, fmtTime };

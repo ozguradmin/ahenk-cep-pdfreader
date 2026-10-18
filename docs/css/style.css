@@ -304,6 +304,15 @@ h1 em { font-style: italic; color: var(--accent); font-weight: 400; letter-spaci
 .spinner { width: 46px; height: 46px; flex: none; border-radius: 50%; border: 4px solid var(--paper-2); border-top-color: var(--accent); animation: spin .9s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 .alt-row { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; margin-top: 18px; }
+.saved { margin-top: 22px; padding-top: 18px; border-top: 1px solid var(--line); }
+.saved-title { font-family: var(--serif); font-size: 1.15rem; font-weight: 600; margin: 0 0 10px; }
+.saved-list { list-style: none; padding: 0; margin: 0; display: grid; gap: 8px; }
+.saved-list li { display: flex; align-items: center; gap: 10px; padding: 10px 10px 10px 16px; border-radius: 16px; border: 1px solid var(--line); background: var(--card-2); }
+.sv-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.sv-main strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sv-main span { color: var(--muted); font-size: .85rem; }
+.sv-del .ic { width: 18px; height: 18px; }
+.saved .hint { margin: 8px 0 0; }
 .privacy { display: flex; align-items: center; justify-content: center; gap: 8px; margin: 16px 0 0; color: var(--muted); font-size: .875rem; text-align: center; }
 .privacy .ic { width: 16px; height: 16px; }
 
@@ -361,6 +370,9 @@ input[type="range"]::-moz-range-thumb { width: 20px; height: 20px; border-radius
 .est-item small { font-size: .75rem; letter-spacing: .06em; text-transform: uppercase; font-weight: 700; color: var(--muted); }
 .est-item strong { font-family: var(--serif); font-size: 1.45rem; font-weight: 600; letter-spacing: -.01em; }
 .form-msg { margin: 12px 0 0; color: var(--danger); font-weight: 600; }
+.est-tip { display: flex; align-items: flex-start; gap: 8px; margin: 12px 0 0; padding: 10px 14px; border-radius: var(--r); background: var(--wash); color: var(--ink-2); font-size: .9rem; }
+.est-tip .ic { width: 18px; height: 18px; color: var(--accent); margin-top: 1px; }
+.link-btn { border: 0; background: none; padding: 0; color: var(--accent); font-weight: 700; text-decoration: underline; text-underline-offset: .2em; cursor: pointer; white-space: nowrap; }
 
 /* audio step */
 .gen { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: clamp(14px, 3vw, 28px); align-items: center; padding: clamp(16px, 3vw, 24px); border-radius: 22px; background: var(--card-2); border: 1px solid var(--line); }

@@ -170,6 +170,11 @@
             <button class="btn btn-ghost" id="paste-btn" type="button"><svg class="ic" aria-hidden="true"><use href="#i-text"/></svg>Metin yapıştır</button>
             <button class="btn btn-ghost" id="sample-btn" type="button"><svg class="ic" aria-hidden="true"><use href="#i-spark"/></svg>Örnek metinle dene</button>
           </div>
+          <section class="saved" id="saved" hidden aria-labelledby="saved-title">
+            <h2 class="saved-title" id="saved-title">Kaydedilen dönüştürmeler</h2>
+            <ul class="saved-list" id="saved-list"></ul>
+            <p class="hint" id="saved-note"></p>
+          </section>
           <p class="privacy"><svg class="ic" aria-hidden="true"><use href="#i-lock"/></svg>Dosyanız bu cihazdan çıkmaz: okuma da seslendirme de tarayıcınızda yapılır.</p>
         </div>
 
@@ -233,8 +238,9 @@
               <span class="est-item"><small>Ses süresi</small><strong id="est-audio" class="num">–</strong></span>
               <span class="est-item"><small>Hazırlama</small><strong id="est-make" class="num">–</strong></span>
             </div>
-            <button class="btn btn-primary btn-lg" id="go" type="button"><svg class="ic" aria-hidden="true"><use href="#i-wave"/></svg>Sese dönüştür</button>
+            <button class="btn btn-primary btn-lg" id="go" type="button"><svg class="ic" aria-hidden="true"><use href="#i-wave"/></svg><span id="go-label">Sese dönüştür</span></button>
           </div>
+          <p class="est-tip" id="est-tip" hidden><svg class="ic" aria-hidden="true"><use href="#i-spark"/></svg><span id="est-tip-text"></span> <button class="link-btn" id="est-tip-btn" type="button">Dengeli'ye geç</button></p>
           <p class="form-msg" id="text-msg" role="alert" hidden></p>
         </div>
 
@@ -308,7 +314,7 @@
       <div class="notes">
         <div class="note">
           <svg class="ic" aria-hidden="true"><use href="#i-lock"/></svg>
-          <p><strong>Gizlilik.</strong> Dosyanız, metniniz ve ürettiğiniz ses hiçbir sunucuya gönderilmez. Sayfa yalnızca modeli ve gerekli kütüphaneleri indirir; model sonraki ziyaretlerde önbellekten açılır.</p>
+          <p><strong>Gizlilik.</strong> Dosyanız, metniniz ve ürettiğiniz ses hiçbir sunucuya gönderilmez. Sayfa yalnızca modeli ve gerekli kütüphaneleri indirir. Dönüştürmeleriniz yalnızca bu cihazda saklanır; sekme kapansa da kaldığınız yerden devam edersiniz.</p>
         </div>
         <div class="note">
           <svg class="ic" aria-hidden="true"><use href="#i-info"/></svg>
@@ -316,7 +322,7 @@
         </div>
         <div class="note">
           <svg class="ic" aria-hidden="true"><use href="#i-chip"/></svg>
-          <p><strong>Sınırlar.</strong> Tek bir kadın sesiyle, nötr tonda okur. Uzun belgeler zaman alır, telefonlarda daha da uzun: üretim sürerken sekmeyi açık tutun. Sonu yükselen sorular (“Yarın geliyorsun?”) yükselmez.</p>
+          <p><strong>Sınırlar.</strong> Tek bir kadın sesiyle, nötr tonda okur. Uzun belgeler zaman alır, telefonlarda daha da uzun: üretim sürerken sekmeyi açık tutun; kapanırsa “Kaydedilen dönüştürmeler”den devam edin. Sonu yükselen sorular (“Yarın geliyorsun?”) yükselmez.</p>
         </div>
       </div>
     </section>

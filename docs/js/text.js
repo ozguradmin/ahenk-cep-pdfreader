@@ -318,9 +318,11 @@ export const PAUSES = { sentence: 0.3, paragraph: 0.65, heading: 0.85 };
 
 // blocks -> segments {text (shown), speak (read), pause (seconds after it), block (index), heading}.
 // Fragments under MIN characters ("Dr.", "1.", "vb.") join the next sentence: the sentence splitter breaks there.
-export function segment(blocks, MIN = 40) {
+// A long document can be done in slices: `offset` is the index of blocks[0], `final` whether it is the last slice.
+export function segment(blocks, MIN = 40, offset = 0, final = true) {
   const segs = [];
-  blocks.forEach((b, bi) => {
+  blocks.forEach((b, k) => {
+    const bi = offset + k;
     const parts = b.heading ? [b.text] : sentences(b.text).flatMap((s) => splitLong(s));
     const merged = [];
     for (const p of parts) {
@@ -338,7 +340,7 @@ export function segment(blocks, MIN = 40) {
       segs.push({ text, speak: speakable(text), pause, block: bi, heading: !!b.heading });
     });
   });
-  if (segs.length) segs[segs.length - 1].pause = 0.4;
+  if (final && segs.length) segs[segs.length - 1].pause = 0.4;
   return segs;
 }
 

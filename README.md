@@ -21,10 +21,13 @@ cihazında üretilir; dosya da metin de hiçbir sunucuya gitmez.
    devam ettirilebilir. Ses üretilirken MP3'e (64 kbit/s, saatte ~29 MB) çevrilir, bitince beklemeden **MP3**
    indirilir; kısa seslerde (bilgisayarda 30, telefonda 10 dakikaya kadar) **WAV** (48 kHz, kayıpsız) da sunulur.
    Dosyalara “yapay zekâ ile üretilmiş ses” notu yazılır.
-4. **Uzun belgeler.** Çok uzun bir belge bölümlere ayrılır (bilgisayarda bölüm başına en çok ~6, telefonda ~2 saat
-   ses; bölümler mümkünse bir başlıkta başlar). Bölümler sırayla dönüştürülüp ayrı ayrı indirilir. Okuyucu metni
-   sayfa sayfa gösterir (yaklaşık 120 cümle), böylece kitap boyunda bir metinde de sayfa akıcı kalır. OCR bitince OCR
-   motoru ve PDF bellekten bırakılır.
+4. **Uzun belgeler ve kaldığı yerden devam.** Üretilen ses parça parça cihazdaki tarayıcı deposuna (IndexedDB)
+   yazılır: sekme kapansa, sayfa yenilense ya da tarayıcı çökse de iş kaybolmaz; “Kaydedilen dönüştürmeler”den
+   kaldığı yerden devam edilir, dinleme konumu da hatırlanır (son 3 dönüştürme tutulur). Ses diskte durduğu için
+   bir kitabın tamamı tek seferde dönüştürülebilir; okuyucu metni sayfa sayfa gösterir (~120 cümle), böylece kitap
+   boyunda bir metinde de sayfa akıcı kalır. Depolamanın olmadığı tarayıcılarda ses bellekte tutulur ve çok uzun
+   belgeler bölümlere ayrılır (bilgisayarda ~6, telefonda ~2 saat). OCR bitince OCR motoru ve PDF bellekten bırakılır.
+   Uzun bir belge en iyi kalitede saatler sürecekse sayfa “Dengeli” kalitenin ne kadar kazandıracağını söyler.
 
 Model sayfa açılır açılmaz kendiliğinden yüklenir (ilk ziyarette ~17 MB, sonra önbellekten); ilerlemesi yüzde olarak
 gösterilir. Telefonlarda ekran üretim boyunca açık tutulur (Wake Lock), kilit ekranından oynatıcı denetlenebilir
@@ -41,6 +44,7 @@ gösterilir. Telefonlarda ekran üretim boyunca açık tutulur (Wake Lock), kili
 | Model: indirme + sha256 + önbellek, iş parçacıkları, bölüm bölüm sentez, iptal | `docs/js/worker.js` |
 | Ahenk Cep'in örnekleme döngüsü, arka uç seçimi, trnorm ön ucu, torch.randn | `docs/js/engine.js`, `backend.js`, `front.js`, `randn.js`, `docs/py/` |
 | Sesin saklanması (MP3 parçaları, kısa seslerde PCM) ve oynatıcı (üretilirken dinleme, dalga biçimi, kilit ekranı) | `docs/js/player.js` |
+| İşlerin cihazda saklanması (IndexedDB) ve kaldığı yerden devam | `docs/js/storage.js` |
 | MP3 (lamejs, ses üretilirken ayrı worker'da), WAV ve ID3 etiketi | `docs/js/mp3.js`, `docs/js/wav.js` |
 | GitHub Pages'te çapraz köken yalıtımı (çok iş parçacıklı WebAssembly için) | `docs/coi-serviceworker.js` |
 
