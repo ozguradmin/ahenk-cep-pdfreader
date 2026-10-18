@@ -1116,13 +1116,13 @@ const _PASSES = [
 const _UNASSIGNED_RE = re.compile(`[${UNASSIGNED}]`);
 const _NONCHAR = '\u{fdd0}';
 // A lone surrogate is a code point of its own to Python, and stays one when a pass deletes what stood between it and
-// another ("\ud83d‍\ude00" loses its ZWJ, "5\ud800\udc00" its mark); a JS string would then hold one astral
+// another ("\ud83d\u200d\ude00" loses its ZWJ, "5\ud800\ue000\udc00" its mark); a JS string would then hold one astral
 // character there, a letter to \w if it is one. So lone surrogates get a noncharacter of their own for the passes
 // (no letter, digit, space or cased character, as a surrogate is to Python) and come back at the end. After the swap
 // above no U+FDD1 is left in the text, so every one in the output is such a placeholder.
 const _LONE_SURROGATE_RE = /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/g;
 const _SURROGATE = '\u{fdd1}';
-const _PLACEHOLDER_RE = /[﷐﷑]/g;
+const _PLACEHOLDER_RE = /[\ufdd0\ufdd1]/g;
 
 // The placeholders of out back to the characters they stand for, in order; drop: leave out the surrogates. null when
 // a count changed (no pass is known to do that), as the placeholders would land in the wrong places.

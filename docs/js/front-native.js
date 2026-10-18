@@ -10,6 +10,7 @@
 // Works in browsers (Chrome, Firefox, Safari 16.4+) and Node; no Node APIs.
 
 import { normalize, normalize_for_frontend } from './trnorm/index.js';
+import { UNASSIGNED } from './trnorm/unassigned.js';
 
 export { normalize };
 
@@ -58,9 +59,37 @@ function py_error(type, message) {
   return e;
 }
 
-// float(x). Strings follow float()'s grammar with ASCII digits (Python also takes other scripts' digits).
+// float(x). A string goes through _PyUnicode_TransformDecimalAndSpaceToASCII first: below U+007F a character stays,
+// above it whitespace becomes a space and a decimal digit of any script (Unicode 15.0, Pyodide's) its ASCII digit,
+// anything else fails. Only ASCII whitespace is stripped after that ("\x1c1.5" fails, "\u30001.5" and "١.٥" do not).
 const FLOAT = /^[+-]?(?:(?:\d(?:_?\d)*)?\.\d(?:_?\d)*|\d(?:_?\d)*\.?)(?:e[+-]?\d(?:_?\d)*)?$/i;
 const FLOAT_WORD = /^([+-]?)(inf|infinity|nan)$/i;
+const ASCII_SPACE = /^[\t\n\v\f\r ]+|[\t\n\v\f\r ]+$/g;
+const ND = /^\p{Nd}$/u;
+let ND_LATER = null; // the code points Unicode 15.0 leaves unassigned: no digit to Python, maybe one to this engine
+
+// the ASCII digit of a decimal digit c (\p{Nd}, which Unicode encodes in runs of ten), '' for any other character
+function decimal_digit(c) {
+  if (!ND.test(c) || (ND_LATER ||= new RegExp(`[${UNASSIGNED}]`, 'u')).test(c)) return '';
+  let zero = c.codePointAt(0);
+  while (ND.test(String.fromCodePoint(zero - 1))) zero--;
+  return String((c.codePointAt(0) - zero) % 10);
+}
+
+function float_ascii(s) {
+  let out = '';
+  for (const c of s) {
+    const u = c.codePointAt(0);
+    if (u < 0x7f) out += c;
+    else if (is_space(u)) out += ' ';
+    else {
+      const d = decimal_digit(c);
+      if (!d) return null;
+      out += d;
+    }
+  }
+  return out;
+}
 
 function py_float(x) {
   if (typeof x === 'number') return x;
@@ -71,9 +100,9 @@ function py_float(x) {
     return f;
   }
   if (typeof x === 'string') {
-    const s = strip(x);
-    if (FLOAT.test(s)) return Number(s.replaceAll('_', ''));
-    const w = FLOAT_WORD.exec(s);
+    const s = float_ascii(x)?.replace(ASCII_SPACE, '');
+    if (s != null && FLOAT.test(s)) return Number(s.replaceAll('_', ''));
+    const w = s == null ? null : FLOAT_WORD.exec(s);
     if (w) return w[2].toLowerCase() === 'nan' ? NaN : (w[1] === '-' ? -Infinity : Infinity);
     throw py_error('ValueError', `could not convert string to float: ${JSON.stringify(x)}`);
   }
