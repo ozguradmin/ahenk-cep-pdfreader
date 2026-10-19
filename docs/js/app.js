@@ -730,6 +730,36 @@ editor.addEventListener('input', () => {
   updateCountsSoon();
 });
 
+// The text as it is in the editor (from a PDF, a document or OCR, edited or not), to the clipboard.
+let copyTimer = 0;
+$('copy-text').addEventListener('click', async () => {
+  const text = editor.value;
+  if (!text.trim()) {
+    toast('Kopyalanacak metin yok.');
+    return;
+  }
+  let ok = false;
+  try {
+    await navigator.clipboard.writeText(text);
+    ok = true;
+  } catch {
+    // older browsers, or no permission: select it and copy the old way
+    const [a, b] = [editor.selectionStart, editor.selectionEnd];
+    editor.focus();
+    editor.select();
+    try { ok = document.execCommand('copy'); } catch { ok = false; }
+    editor.setSelectionRange(a, b);
+  }
+  if (!ok) {
+    toast('Kopyalanamadı. Metni seçip elle kopyalayabilirsiniz.', 5000);
+    return;
+  }
+  $('copy-label').textContent = 'Kopyalandı';
+  clearTimeout(copyTimer);
+  copyTimer = setTimeout(() => { $('copy-label').textContent = 'Kopyala'; }, 2000);
+  toast(`Metin kopyalandı (${nf(text.length)} karakter).`);
+});
+
 let countTimer = 0;
 function updateCountsSoon() {
   clearTimeout(countTimer);

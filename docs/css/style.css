@@ -337,6 +337,9 @@ h1 {
   font-variation-settings: 'opsz' 16; transition: border-color .2s, box-shadow .2s;
 }
 .editor:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 4px var(--wash); }
+.editor-wrap { position: relative; }
+.editor-wrap .editor { padding-bottom: 60px; }
+.copy-btn { position: absolute; right: 22px; bottom: 14px; box-shadow: var(--shadow); }
 .options { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 18px; }
 .opt { padding: 16px 18px; border-radius: 18px; border: 1px solid var(--line); background: var(--card-2); }
 .opt-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; font-weight: 700; margin-bottom: 12px; }

@@ -66,6 +66,7 @@
     <symbol id="i-wave" viewBox="0 0 24 24"><path d="M3 12h1.5M6.5 8.5v7M10 5v14M13.5 9v6M17 6.5v11M20.5 12H21" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/></symbol>
     <symbol id="i-lock" viewBox="0 0 24 24"><rect x="5" y="10.5" width="14" height="10" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M8.5 10.5V8a3.5 3.5 0 0 1 7 0v2.5" fill="none" stroke="currentColor" stroke-width="1.8"/></symbol>
     <symbol id="i-chip" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M9.5 3v3M14.5 3v3M9.5 18v3M14.5 18v3M3 9.5h3M3 14.5h3M18 9.5h3M18 14.5h3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+    <symbol id="i-copy" viewBox="0 0 24 24"><rect x="8.5" y="8.5" width="11" height="11" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M15.5 5.5v-.5a2 2 0 0 0-2-2h-8a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
     <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12.5 4.5 4.5L19 7.5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
     <symbol id="i-x" viewBox="0 0 24 24"><path d="M6.5 6.5l11 11m0-11-11 11" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
     <symbol id="i-stop" viewBox="0 0 24 24"><rect x="6.5" y="6.5" width="11" height="11" rx="2" fill="currentColor"/></symbol>
@@ -214,7 +215,10 @@
           </div>
 
           <label class="field-label" for="editor">Okunacak metin <span class="hint">· dilediğiniz gibi düzenleyebilirsiniz; paragrafları boş satırla ayırın</span></label>
-          <textarea id="editor" class="editor" spellcheck="false" lang="tr" placeholder="Seslendirmek istediğiniz metni buraya yazın ya da yapıştırın."></textarea>
+          <div class="editor-wrap">
+            <textarea id="editor" class="editor" spellcheck="false" lang="tr" placeholder="Seslendirmek istediğiniz metni buraya yazın ya da yapıştırın."></textarea>
+            <button class="btn btn-ghost btn-sm copy-btn" id="copy-text" type="button"><svg class="ic" aria-hidden="true"><use href="#i-copy"/></svg><span id="copy-label">Kopyala</span></button>
+          </div>
 
           <div class="options">
             <div class="opt">
