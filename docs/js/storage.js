@@ -6,6 +6,9 @@
 // texts:  {id, segs}  (the segments to speak; written once, kept apart so progress updates stay small)
 // chunks: {job, index, mp3 (Blob), samples, peaks (Uint8Array), failed}  key [job, index]
 //
+// A job open in a tab is locked (holdJob) against another tab's pruning; a job that is gone anyway makes the next
+// write reject, so the page knows its audio is no longer kept.
+//
 // Every call fails soft: without IndexedDB (some private windows) openStore() gives null and the page keeps the
 // audio in memory as before.
 
@@ -63,22 +66,29 @@ class Store {
     return row ? row.segs : null;
   }
 
-  async patchJob(id, fields) {
+  // must: the job has to be there (another tab may have deleted it, see prune), else this rejects
+  async patchJob(id, fields, { must = false } = {}) {
     const tx = this.db.transaction('jobs', 'readwrite');
     const s = tx.objectStore('jobs');
     const meta = await req(s.get(id));
     if (meta) s.put({ ...meta, ...fields, updated: Date.now() });
     await done(tx);
+    if (!meta && must) throw gone();
   }
 
-  // stores the chunk and gives back the stored Blob (disk-backed), so the page can drop its in-memory copy
+  // Stores the chunk and gives back the stored Blob, so the page can drop its in-memory copy. Read back in a
+  // transaction of its own, after the write has committed: only then is it the copy on disk (read inside the
+  // writing transaction, Chrome hands back the same in-memory Blob).
   async putChunk(id, index, chunk) {
-    const tx = this.db.transaction('chunks', 'readwrite');
-    const s = tx.objectStore('chunks');
-    s.put({ job: id, index, ...chunk });
-    const back = req(s.get([id, index]));
+    const tx = this.db.transaction(['jobs', 'chunks'], 'readwrite');
+    const meta = await req(tx.objectStore('jobs').get(id));
+    if (!meta) {
+      tx.abort();
+      throw gone();
+    }
+    tx.objectStore('chunks').put({ job: id, index, ...chunk });
     await done(tx);
-    const row = await back;
+    const row = await req(this.db.transaction('chunks', 'readonly').objectStore('chunks').get([id, index]));
     return row ? row.mp3 : chunk.mp3;
   }
 
@@ -110,12 +120,29 @@ class Store {
     await done(tx);
   }
 
-  // keeps the newest KEEP - 1 jobs besides `keepId`
+  // keeps the newest KEEP - 1 jobs besides `keepId`, and any job a tab has open (see holdJob)
   async prune(keepId) {
     const all = await this.jobs();
-    const others = all.filter((j) => j.id !== keepId);
+    let open = new Set();
+    try {
+      open = new Set((await navigator.locks.query()).held.map((l) => l.name));
+    } catch { /* no Web Locks: only age counts */ }
+    const others = all.filter((j) => j.id !== keepId && !open.has(LOCK + j.id));
     for (const j of others.slice(KEEP - 1)) await this.deleteJob(j.id);
   }
+}
+
+const gone = () => Object.assign(new Error('this job was deleted from the device'), { name: 'JobGone' });
+
+// A tab with a job open holds a Web Lock on it, so that another tab's prune leaves it alone. -> release()
+const LOCK = 'ahenk-okur-job-';
+export function holdJob(id) {
+  let release = () => {};
+  try {
+    const held = new Promise((resolve) => { release = resolve; });
+    navigator.locks.request(LOCK + id, () => held).catch(() => {});
+  } catch { /* no Web Locks */ }
+  return release;
 }
 
 export async function storageUse() {

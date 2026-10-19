@@ -6,7 +6,7 @@
 // is new: a document is a list of segments (a sentence or a few), spoken one after the other as one job that reports
 // its progress, sends each segment's audio as soon as it is ready, and can be cancelled between two Euler steps.
 //
-// Messages in:  {type: 'init', modelBase, pyBase, variant, ep, device, maxThreads, front: 'js' | 'py'}
+// Messages in:  {type: 'init', modelBase, pyBase, variant, ep, device, maxThreads, front: 'js' | 'py', calibrate}
 //               {type: 'synth', id, segments: [{text, pause}], from, steps, speed, seed}
 //               {type: 'cancel', id}
 // Messages out: {type: 'status', stage, ...} {type: 'alive'} {type: 'ready', info} {type: 'backend', info}
@@ -208,8 +208,20 @@ async function openEngine(ort, gpu, threads, buffers, files, manifest, frontP, p
         // Safari 26.0-26.5 does for a few rare character pairs) goes to the Python, which reads it right.
         if (front.kind === 'js' && !(e && e.python)) {
           console.warn('Ahenk Okur: the JavaScript front-end cannot read this text here; asking the Python one.', e);
+          // Pyodide may download now, in the middle of a job, with nothing else to report: the beat keeps the
+          // page's watchdog from taking a slow connection for a dead worker
+          const beat = setInterval(() => post({ type: 'alive' }), BEAT_MS);
+          let py;
           try {
-            return (await pyFront(pyBase, manifest.vocab)).prepare(text, speed);
+            py = await pyFront(pyBase, manifest.vocab);
+          } catch (e2) {
+            // could not load (offline): the job stops here and can go on later, the sentence is not lost
+            throw tag(e2, errorKind(e2) === 'network' ? { kind: 'network' } : { where: 'front' });
+          } finally {
+            clearInterval(beat);
+          }
+          try {
+            return py.prepare(text, speed);
           } catch (e2) {
             throw tag(e2, { where: 'front' });
           }
@@ -294,10 +306,11 @@ async function sayOnce(text, opts) {
   } catch (e) {
     if (!toWasm || e.where === 'front' || e.name === 'AbortError') throw e;
     console.warn('Ahenk Okur: WebGPU failed, using WebAssembly instead.', e);
-    const reopen = toWasm;
-    toWasm = null;
     const old = engine;
-    engine = await reopen();
+    // a reopen that fails (offline) leaves this worker on a GPU engine that does not work: broken, so the page
+    // starts a new worker, which goes to WebAssembly from the start
+    engine = await toWasm().catch((e2) => { throw tag(e2, { broken: true }); });
+    toWasm = null;
     releaseAll(old.s);
     info = { ...info, backend: 'wasm', gpuError: shortError(e) };
     post({ type: 'backend', info });
@@ -355,19 +368,19 @@ async function calibrate() {
   try {
     const text = 'Bugün hava çok güzel; öğleden sonra biraz yürüyüş yapalım mı?';
     const rtfAt = async (steps) => {
+      await breathe(); // a 'synth' already queued gets in here and sets `asked`
+      if (asked) throw Object.assign(new Error('a job came first'), { skip: true });
       const t0 = performance.now();
       const out = await engine.say(text, { steps });
       return (performance.now() - t0) / 1000 / (out.audio.length / info.sampleRate);
     };
     await rtfAt(4); // the first full-length run still compiles and allocates
-    if (asked) return;
     const r4 = await rtfAt(4);
-    if (asked) return;
     const r8 = await rtfAt(8);
     const per = Math.max(0.0005, (r8 - r4) / 4);
     post({ type: 'calibrated', base: Math.max(0.005, r4 - 4 * per), per, backend: info.backend, threads: info.threads });
   } catch (e) {
-    console.warn('Ahenk Okur: calibration skipped', e);
+    if (!e.skip) console.warn('Ahenk Okur: calibration skipped', e);
   }
 }
 
@@ -376,7 +389,7 @@ async function calibrate() {
 function failure(e) {
   console.error(e);
   return {
-    kind: errorKind(e), message: shortError(e), threads: (e && e.threads) || 0, broken: engineBroken(e),
+    kind: errorKind(e), message: shortError(e), threads: (e && e.threads) || 0, broken: !!(e && e.broken) || engineBroken(e),
     index: e && Number.isInteger(e.index) ? e.index : undefined,
   };
 }
@@ -384,6 +397,7 @@ function failure(e) {
 self.onmessage = ({ data }) => {
   if (data.type === 'init') {
     ready = init(data);
+    if (data.calibrate === false) asked = true; // the page has a job waiting for this worker
     ready.then(() => { queue = queue.then(calibrate); }, () => {});
     ready.catch((e) => post({ type: 'error', stage: 'init', ...failure(e) }));
   } else if (data.type === 'synth') {

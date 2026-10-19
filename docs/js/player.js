@@ -3,7 +3,9 @@
 // Track: the audio of a document, segment by segment, as it arrives: its length, waveform peaks (one per 50 ms) and
 // its MP3 bytes, encoded on the way by js/mp3.js (about 29 MB an hour). The 48 kHz PCM, 345 MB an hour, is kept too
 // while the audio is short enough for a WAV download (`keepPcm` seconds); past that it is let go. Everything is
-// held in Blobs, outside the JS heap. If the MP3 encoder cannot run, the track falls back to PCM and WAV only.
+// held in Blobs, outside the JS heap. If the MP3 encoder cannot run, the track falls back to PCM and WAV only, as
+// long as all the PCM is still there. The MP3 of a long document is played as one Blob made of groups of GROUP
+// segments, each put together once, so that taking the longer file is not slower at the end of a book.
 //
 // Player: one <audio> element playing the segments ready so far. While the document is still being made, it plays
 // what is there; when it reaches the end and more has arrived, it takes the longer file and goes on from the same
@@ -13,6 +15,7 @@
 import { wavBlob } from './wav.js';
 
 const PEAK_S = 0.05;
+const GROUP = 256;
 
 export class Track {
   constructor(sampleRate, { keepPcm = 1800 } = {}) {
@@ -26,8 +29,13 @@ export class Track {
     this.offsets = [0];
     this.peaks = new Uint8Array(4096); // 0-255, one per PEAK_S; this.npeaks used
     this.npeaks = 0;
+    this.peakAt = [0]; // npeaks after each segment
     this.made = 0; // segments whose samples have arrived
     this.count = 0; // segments that can be played, from the start
+    this.bytes = 0; // MP3 bytes of those
+    this.fin = 0; // segments [0, fin) hold their final Blob (on disk, or in memory when nothing is stored)
+    this.keepsMp3 = false; // nothing is stored: every MP3 Blob is final as it comes
+    this.groups = []; // Blobs of GROUP final segments each
   }
 
   pushPeaks(p) {
@@ -56,6 +64,7 @@ export class Track {
       peaks[j] = Math.round((m / 32768) * 255);
     }
     this.pushPeaks(peaks);
+    this.peakAt.push(this.npeaks);
     this.made += 1;
     if (this.wavOk && this.offsets[this.made] / this.sr > this.keepPcm && this.mode === 'mp3') {
       this.wavOk = false;
@@ -74,16 +83,27 @@ export class Track {
     for (const r of rows) {
       t.offsets.push(t.offsets[t.made] + r.samples);
       if (r.peaks) t.pushPeaks(r.peaks);
+      t.peakAt.push(t.npeaks);
       t.mp3.push(r.mp3);
+      t.bytes += r.mp3.size;
       t.made += 1;
     }
     t.count = t.made;
+    t.fin = t.made;
     return t;
   }
 
-  // the same bytes, now held on disk
+  // the same bytes, now held on disk (in order)
   swapMp3(index, blob) {
-    if (blob && index < this.mp3.length) this.mp3[index] = blob;
+    if (!blob || index >= this.mp3.length) return;
+    this.mp3[index] = blob;
+    if (index === this.fin) this.fin += 1;
+  }
+
+  // nothing more will be swapped (storage failed): the Blobs there are are the final ones
+  keepInMemory() {
+    this.keepsMp3 = true;
+    this.fin = this.count;
   }
 
   // a segment's MP3 bytes, in order
@@ -91,18 +111,33 @@ export class Track {
     if (this.mode !== 'mp3') return;
     if (index !== this.count) throw new Error(`mp3 ${index} out of order (have ${this.count})`);
     this.mp3.push(new Blob([bytes]));
+    this.bytes += bytes.length;
     this.count += 1;
+    if (this.keepsMp3) this.fin = this.count;
   }
 
   finish(bytes) { if (bytes && bytes.length) this.tail = new Blob([bytes]); }
 
-  // the MP3 encoder failed: PCM from now on, and only what is still kept can play
+  // Back to the first n segments: what the samples of the others were for is lost (an encoder that died with them).
+  truncate(n) {
+    if (n >= this.made) return;
+    this.made = n;
+    this.count = Math.min(this.count, n);
+    this.offsets.length = n + 1;
+    this.peakAt.length = n + 1;
+    this.npeaks = this.peakAt[n];
+    if (this.pcm.length > n) this.pcm.length = n;
+  }
+
+  // The MP3 encoder failed: PCM from now on, if all of it is still here (else nothing changes, and false).
   fallBack() {
-    if (this.mode === 'wav') return false;
+    if (this.mode === 'wav' || !this.wavOk) return false;
     this.mode = 'wav';
     this.mp3 = [];
+    this.bytes = 0;
+    this.groups = [];
+    this.fin = 0;
     this.keepPcm = Infinity;
-    if (!this.wavOk) return false; // nothing to fall back on
     this.count = this.made;
     return true;
   }
@@ -110,7 +145,7 @@ export class Track {
   get duration() { return this.offsets[this.count] / this.sr; }
   get madeDuration() { return this.offsets[this.made] / this.sr; }
   get wavBytes() { return this.offsets[this.made] * 2 + 44; }
-  get mp3Bytes() { return this.mp3.reduce((n, b) => n + b.size, 0); }
+  get mp3Bytes() { return this.bytes; }
   start(i) { return this.offsets[Math.min(i, this.count)] / this.sr; }
 
   // the segment playing at time t (seconds), or -1
@@ -130,8 +165,13 @@ export class Track {
   wav(info) { return this.wavOk ? wavBlob(this.pcm.slice(0, this.made), this.sr, info) : null; }
 
   mp3Blob(head = null) {
-    if (this.mode !== 'mp3') return null;
-    const parts = this.mp3.slice(0, this.count);
+    if (this.mode !== 'mp3' || !this.count) return null;
+    const G = GROUP;
+    while ((this.groups.length + 1) * G <= this.fin) {
+      const k = this.groups.length * G;
+      this.groups.push(new Blob(this.mp3.slice(k, k + G)));
+    }
+    const parts = [...this.groups, ...this.mp3.slice(this.groups.length * G, this.count)];
     if (this.tail && this.count === this.made) parts.push(this.tail);
     return new Blob(head ? [head, ...parts] : parts, { type: 'audio/mpeg' });
   }
@@ -164,6 +204,7 @@ export class Player {
     this.expected = 0; // the document's expected length in seconds, for the waveform's scale
     this.making = false; // more segments are coming
     this.waiting = false; // reached the end of what is ready while more is coming
+    this.pendingT = null; // where a new source is going, until its metadata has loaded (it reads 0 till then)
     this.rate = 1;
     this.lastSeg = -1;
     this.raf = 0;
@@ -267,12 +308,20 @@ export class Player {
     this.url = null;
     this.urlCount = 0;
     this.waiting = false;
+    this.pendingT = null;
     this.track = null;
   }
 
   time() {
     if (this.waiting) return this.track ? this.track.start(this.urlCount) : 0;
+    if (this.pendingT !== null) return this.pendingT;
     return this.audio.currentTime || 0;
+  }
+
+  // to time t in the current source; before its metadata, the source goes there once it has loaded
+  moveTo(t) {
+    if (this.pendingT !== null) this.pendingT = t;
+    else this.audio.currentTime = t;
   }
 
   scale() {
@@ -283,12 +332,15 @@ export class Player {
   // A WAV of every segment ready now, at time t (keeps playing if it was).
   refresh(t, play) {
     const tr = this.track;
-    if (!tr || !tr.count) return Promise.resolve();
+    const blob = tr && tr.count ? tr.playable(this.opts.info || {}) : null;
+    if (!blob) return Promise.resolve();
     const old = this.url;
-    this.url = URL.createObjectURL(tr.playable(this.opts.info || {}));
+    const url = URL.createObjectURL(blob);
+    this.url = url;
     this.urlCount = tr.count;
+    this.pendingT = t;
     const a = this.audio;
-    a.src = this.url;
+    a.src = url;
     a.playbackRate = this.rate;
     // play() is called at once, still inside the tap that asked for it (iOS refuses a later one); muted until it
     // has moved to t, so the first moments of the WAV are not heard
@@ -306,13 +358,18 @@ export class Player {
     const ready = new Promise((resolve) => {
       const go = () => {
         a.removeEventListener('loadedmetadata', go);
+        if (this.url !== url) return resolve(); // a newer source replaced this one
+        // the latest target: a tap or a seek made while this loaded wins over the one it was made for
+        const to = Math.min(this.pendingT !== null ? this.pendingT : t, tr.duration);
+        this.pendingT = null;
         if (a.muted) a.addEventListener('seeked', () => { a.muted = false; }, { once: true });
-        try { a.currentTime = Math.min(t, tr.duration); } catch { a.muted = false; }
-        if (a.currentTime === 0 && t <= 0.05) a.muted = false;
-        resolve();
+        try { a.currentTime = to; } catch { a.muted = false; }
+        if (to <= 0.05) a.muted = false;
+        return resolve();
       };
       a.addEventListener('loadedmetadata', go);
     });
+    a.addEventListener('error', () => { if (this.url === url) this.pendingT = null; }, { once: true });
     if (old) setTimeout(() => URL.revokeObjectURL(old), 4000);
     return started ? Promise.all([ready, started]).then(([, r]) => r) : ready;
   }
@@ -334,12 +391,21 @@ export class Player {
     const tr = this.track;
     if (!tr || !tr.count) return Promise.resolve('empty');
     this.waiting = false;
-    const t = from !== undefined ? from : this.audio.ended ? 0 : this.time();
+    let t = from !== undefined ? from : this.time();
+    if (from === undefined && this.audio.ended && this.url) {
+      // at the end of what the element has: go on with what came since, wait for what is coming, or start over
+      if (this.urlCount < tr.count) t = tr.start(this.urlCount);
+      else if (this.making) {
+        this.waiting = true;
+        this.sync();
+        return Promise.resolve('waiting');
+      } else t = 0;
+    }
     if (!this.url || this.urlCount < tr.count && (from !== undefined || this.audio.ended || t >= tr.start(this.urlCount) - 0.25)) {
       this.sync();
       return this.refresh(t, true).then(() => 'playing');
     }
-    if (from !== undefined) this.audio.currentTime = from;
+    if (from !== undefined || this.audio.ended) this.moveTo(t);
     const p = this.playEl();
     this.sync();
     return p;
@@ -368,8 +434,10 @@ export class Player {
     if (t >= tr.start(this.urlCount) - 0.05 || !this.url) {
       this.refresh(t, playing);
     } else {
-      this.audio.currentTime = t;
+      this.moveTo(t);
+      if (playing && this.audio.paused) this.playEl(); // it had ended, waiting for more
     }
+    this.sync();
     this.tick(t);
   }
 
@@ -419,7 +487,8 @@ export class Player {
     this.making = false;
     if (this.waiting) {
       this.waiting = false;
-      this.audio.pause();
+      if (this.track && this.track.count > this.urlCount) this.refresh(this.track.start(this.urlCount), true); // the last of it
+      else this.audio.pause();
     }
     this.draw();
     this.sync();
@@ -431,7 +500,7 @@ export class Player {
     root.classList.toggle('is-playing', playing || this.waiting);
     root.classList.toggle('is-waiting', this.waiting);
     this.els.play.setAttribute('aria-label', playing || this.waiting ? 'Duraklat' : 'Oynat');
-    if ('mediaSession' in navigator) navigator.mediaSession.playbackState = playing ? 'playing' : 'paused';
+    if ('mediaSession' in navigator) navigator.mediaSession.playbackState = playing || this.waiting ? 'playing' : 'paused';
     if (playing && !this.raf) {
       const loop = () => {
         this.tick();

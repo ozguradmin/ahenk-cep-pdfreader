@@ -48,14 +48,40 @@ export function cleanText(text) {
     .replace(/[ \t\u00A0\u2000-\u200A\u202F\u205F\u3000]+/g, ' ');
 }
 
-// Two lines of one paragraph: a word broken at the end of the first ("kitap-" + "ların") is mended.
+// How two lines of one paragraph meet, from the end of the first: [characters to drop from it, what goes between].
+// A word broken at the end of the first ("kitap-" + "ların") is mended.
+function joint(a, b) {
+  const end = a.slice(-2);
+  if (/\u00AD$/.test(end)) return [1, ''];
+  if (/\p{L}[-\u2010]$/u.test(end) && LOWER_START.test(b)) return [1, ''];
+  if (/\p{L}[-\u2010]$/u.test(end) && /^\p{Lu}/u.test(b)) return [1, '-']; // "Doğu-" + "Batı"
+  return [0, ' '];
+}
+
 export function joinLines(a, b) {
   if (!a) return b;
   if (!b) return a;
-  if (/\u00AD$/.test(a)) return a.slice(0, -1) + b;
-  if (/\p{L}[-\u2010]$/u.test(a) && LOWER_START.test(b)) return a.slice(0, -1) + b;
-  if (/\p{L}[-\u2010]$/u.test(a) && /^\p{Lu}/u.test(b)) return `${a.slice(0, -1)}-${b}`; // "Doğu-" + "Batı"
-  return `${a} ${b}`;
+  const [cut, sep] = joint(a, b);
+  return a.slice(0, a.length - cut) + sep + b;
+}
+
+// The lines of one paragraph joined: each join is decided from the line before it only, and the text is put together
+// once at the end (joining one line at a time into a growing string is quadratic: a book pasted with single line
+// breaks took seconds).
+export function joinAllLines(lines) {
+  const out = [];
+  let prev = '';
+  for (const l of lines) {
+    if (!l) continue;
+    if (prev) {
+      const [cut, sep] = joint(prev, l);
+      if (cut) out[out.length - 1] = out[out.length - 1].slice(0, -cut);
+      if (sep) out.push(sep);
+    }
+    out.push(l);
+    prev = l;
+  }
+  return out.join('');
 }
 
 // ---- PDF layout ----------------------------------------------------------------------------------------------------
@@ -232,28 +258,38 @@ export function plainBlocks(raw) {
     if (s && (LETTER.test(s) || /\d/.test(s))) out.push({ text: s, heading: false });
   };
   const joinAll = (lines, breakAfter) => {
-    let cur = '';
-    lines.forEach((l, i) => {
-      if (cur && BULLET.test(l)) {
-        push(cur);
-        cur = '';
+    let cur = [];
+    for (const l of lines) {
+      if (cur.length && BULLET.test(l)) {
+        push(joinAllLines(cur));
+        cur = [];
       }
-      cur = joinLines(cur, l.replace(BULLET, ''));
-      if (breakAfter && breakAfter(l, i)) {
-        push(cur);
-        cur = '';
+      cur.push(l.replace(BULLET, ''));
+      if (breakAfter && breakAfter(l)) {
+        push(joinAllLines(cur));
+        cur = [];
       }
-    });
-    push(cur);
+    }
+    push(joinAllLines(cur));
+  };
+  // hard-wrapped (lines of about the same width): a paragraph ends at a short line that ends a sentence
+  const wrapBreak = (lines) => {
+    const wide = quantile(lines.map((l) => l.length), 0.9);
+    const hard = wide <= 110 && lines.filter((l) => l.length > wide * 0.6).length > lines.length * 0.5;
+    return hard ? (l) => SENTENCE_END.test(l) && l.length < wide * 0.75 : null;
   };
   if (/\n[ \t]*\n/.test(text)) {
-    for (const chunk of text.split(/\n[ \t]*\n+/)) joinAll(chunk.split('\n').map((l) => l.trim()).filter(Boolean));
+    for (const chunk of text.split(/\n[ \t]*\n+/)) {
+      const lines = chunk.split('\n').map((l) => l.trim()).filter(Boolean);
+      // a long run of lines with no blank line in it (a book whose paragraphs are marked by indents, after a title
+      // set off by one blank line) is not one paragraph
+      joinAll(lines, lines.length >= 30 ? wrapBreak(lines) : null);
+    }
     return mendBreaks(out);
   }
   const lines = text.split('\n').map((l) => l.trim()).filter(Boolean);
-  const wide = quantile(lines.map((l) => l.length), 0.9);
-  const hardWrapped = lines.length >= 4 && wide <= 110 && lines.filter((l) => l.length > wide * 0.6).length > lines.length * 0.5;
-  if (hardWrapped) joinAll(lines, (l) => SENTENCE_END.test(l) && l.length < wide * 0.75);
+  const breakAfter = lines.length >= 4 ? wrapBreak(lines) : null;
+  if (breakAfter) joinAll(lines, breakAfter);
   else for (const l of lines) push(l.replace(BULLET, ''));
   return out;
 }
@@ -283,7 +319,7 @@ export function parseEditor(text) {
   return text
     .replace(/\r\n?/g, '\n')
     .split(/\n[ \t]*\n+/)
-    .map((p) => p.split('\n').map((l) => l.trim()).filter(Boolean).reduce((a, b) => joinLines(a, b), ''))
+    .map((p) => joinAllLines(p.split('\n').map((l) => l.trim())))
     .filter((p) => p && (LETTER.test(p) || /\d/.test(p)))
     .map((p) => ({ text: p, heading: looksLikeHeading(p) }));
 }
@@ -363,9 +399,11 @@ export const countWords = (text) => (text.match(/[\p{L}\d]+(?:['’][\p{L}]+)?/g
 export const spokenChars = (text) => text.length + 2.5 * (text.match(/\d/g) || []).length;
 
 // A long document in parts of at most `max` spoken characters, cut between paragraphs. A heading in the last fifth
-// of a part starts the next one, so parts tend to begin at a chapter. A paragraph longer than a part is one part.
+// of a part starts the next one, so parts tend to begin at a chapter. A paragraph longer than a part (a book pasted
+// with no blank lines is one) is cut between its sentences.
 // -> [{blocks, chars, from, to, title}] (from / to: first and last page, when the blocks know their page)
 export function splitParts(blocks, max) {
+  blocks = blocks.flatMap((b) => cutBlock(b, max));
   const parts = [];
   let cur = [];
   let size = 0;
@@ -386,6 +424,25 @@ export function splitParts(blocks, max) {
   }
   close();
   return parts;
+}
+
+function cutBlock(b, max) {
+  if (spokenChars(b.text) + 2 <= max) return [b];
+  const out = [];
+  let cur = [];
+  let size = 0;
+  for (const s of sentences(b.text)) {
+    const n = spokenChars(s) + 1;
+    if (cur.length && size + n > max) {
+      out.push({ ...b, text: cur.join(' ') });
+      cur = [];
+      size = 0;
+    }
+    cur.push(s);
+    size += n;
+  }
+  if (cur.length) out.push({ ...b, text: cur.join(' ') });
+  return out;
 }
 
 // Seconds of speech for a number of characters of written text, at speed 1: about 14 characters a second with the

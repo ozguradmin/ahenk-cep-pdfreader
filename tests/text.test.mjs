@@ -104,3 +104,24 @@ test('long documents split into parts between paragraphs, preferably at a headin
   assert.equal(parts[0].from, 10);
   assert.equal(splitParts([{ text: 'Kısa.', heading: false }], 2500).length, 1);
 });
+
+test('a book with single line breaks: linear, and its paragraphs are kept apart', () => {
+  const line = 'Bu satır bir kitabın sayfasından alınmış, yetmiş karaktere yakın bir satır';
+  const body = [];
+  for (let p = 0; p < 1000; p++) {
+    for (let k = 0; k < 15; k++) body.push(line);
+    body.push('ve paragraf burada bitiyor.');
+  }
+  let t0 = performance.now();
+  const pasted = parseEditor(body.join('\n'));
+  assert.ok(performance.now() - t0 < 1500, 'parseEditor is linear');
+  assert.equal(pasted.length, 1, 'the editor joins single line breaks');
+  t0 = performance.now();
+  const txt = plainBlocks(`Kitabın Adı\n\n${body.join('\n')}`);
+  assert.ok(performance.now() - t0 < 1500, 'plainBlocks is linear');
+  assert.equal(txt.length, 1001, 'title + one block per paragraph');
+  assert.ok(txt[1].text.endsWith('bitiyor.'));
+  const parts = splitParts(pasted, 20000);
+  assert.ok(parts.length > 50 && parts.every((p) => p.chars <= 20000), 'a paragraph longer than a part is cut');
+  assert.equal(parts.map((p) => p.blocks.map((b) => b.text).join(' ')).join(' '), pasted[0].text, 'between sentences, nothing lost');
+});
