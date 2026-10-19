@@ -84,6 +84,7 @@ ancak bazı Türk internet sağlayıcıları `*.pages.dev` adreslerini engelliyo
 
 Kod Apache-2.0 (`LICENSE`); üçüncü taraf parçalar ve atıflar `NOTICE` dosyasında. Ses modeli Ahenk Cep,
 CC BY 4.0: “Ahenk Cep, Ahenk (https://github.com/ozguradmin/ahenk-turkish-tts), CC BY 4.0”.
+Zorunlu değil ama projenizde kullanırsanız bir bağlantı verirseniz ya da bize haber verirseniz (destek@ozgurguler.tech) seviniriz.
 
 **Bu ses yapaydır.** Ahenk Cep'in sesi (f022) bir metin tarifinden tasarlandı, gerçek bir kişi değildir. Ürettiğiniz
 sesi paylaşırken yapay zekâ ile üretildiğini belirtin; kimseyi taklit etmek ya da yanıltmak için kullanmayın.
