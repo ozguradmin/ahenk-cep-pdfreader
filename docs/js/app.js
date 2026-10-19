@@ -577,7 +577,8 @@ function openDoc(doc) {
   state.edited = false;
   state.part = 0;
   const pages = doc.pages || 0;
-  const hasPages = pages > 1 && doc.blocks.some((b) => b.page);
+  // a scanned PDF has no text yet: the range then says which pages to read from their images
+  const hasPages = pages > 1 && (doc.blocks.some((b) => b.page) || (doc.kind === 'pdf' && !!doc.pdf && (doc.scanned || !doc.blocks.length)));
   $('range').hidden = !hasPages;
   if (hasPages) {
     $('range-from').max = String(pages);

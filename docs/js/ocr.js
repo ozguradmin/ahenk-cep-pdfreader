@@ -13,7 +13,11 @@ function worker() {
     workerP = (async () => {
       const mod = await import(CDN.tesseract);
       const T = mod.default || mod;
-      return T.createWorker('tur', 1, { logger: (m) => report(m) });
+      const w = await T.createWorker('tur', 1, { logger: (m) => report(m) });
+      // automatic page segmentation: columns and blocks (tesseract.js would read a page as one block of text,
+      // which interleaves the lines of two columns)
+      await w.setParameters({ tessedit_pageseg_mode: '3' });
+      return w;
     })();
     workerP.catch(() => { workerP = null; });
   }
@@ -32,37 +36,107 @@ async function recognize(image, i, n, onProgress) {
   return data.blocks ? cleanOcr(data.blocks) : data.text || '';
 }
 
-// Tesseract's text, without what it read from icons and pictures: a line it is unsure of (confidence under 70)
-// that holds no word of two letters ("5 9 ©" from a like button), and a word without a letter or digit it is
-// unsure of ("«", "..."). A "©" right before a name is an "@" (a handle). Lines keep their breaks; a paragraph of
-// Tesseract's, or a gap between two lines well beyond the paragraph's usual line gap (Tesseract often takes a
-// screenshot's text and the buttons under it for one paragraph), becomes a blank line, for plainBlocks.
+// Tesseract's text, laid out for reading, without what it read from pictures.
+//  - Layout: Tesseract runs with automatic page segmentation (PSM 3, set in worker()), so a two-column page comes as
+//    blocks, column by column. Consecutive blocks in the same column (their x ranges overlap) are one run: its
+//    lines go top to bottom, and pieces of one row close to each other are joined left to right (an answer's letter
+//    "B" and its text can come as two blocks; a footer far to the right of the last line stays apart).
+//  - Pictures: a line Tesseract is unsure of (confidence under 55; patterns, photos and drawings read as letters
+//    come out at 0-50, real text at 80-96), or under 70 with no word of two letters ("5 9 ©" from a like button),
+//    and a word without a letter or digit it is unsure of ("«", "..."). A "©" right before a name is an "@".
+//  - Paragraphs: lines keep their breaks; each block of Tesseract's is a paragraph of its own, and so is a stretch
+//    after a gap well beyond the run's usual line gap: a blank line between them, for plainBlocks.
 const WORDISH = /\p{L}{2}/u;
 const SIGN = /^[^\p{L}\p{N}]+$/u;
+const median = (xs) => [...xs].sort((a, b) => a - b)[xs.length >> 1] || 0;
+
+// a list bullet as Tesseract reads it ("e Lökosit", "© ALP"), before a capital or a digit (not "o": the pronoun)
+const BULLET = /^(?:[e©®•°*·]|[-–—])\s+(?=[\p{Lu}\d])/u;
+function readable(li) {
+  const words = (li.words || []).filter((w) => !(SIGN.test(w.text) && w.confidence < 50));
+  const text = words.map((w) => w.text).join(' ').replace(/©(?=[\p{L}\d_])/gu, '@').replace(BULLET, '').trim();
+  if (!text || li.confidence < 55 || (li.confidence < 70 && !WORDISH.test(text))) return '';
+  // a column of bullets read as one line: "© © © © O ©"
+  const tokens = text.split(/\s+/);
+  if (tokens.length >= 4 && tokens.filter((t) => t.length === 1).length >= 0.7 * tokens.length) return '';
+  return text;
+}
+
+// A line as pieces: Tesseract can take a footer at the far right ("drdahiliye.com") for the end of the line
+// beside it; words more than 4 line heights apart are pieces of their own. -> [{text, x0, x1, y0, y1}]
+function pieces(li) {
+  const h = li.bbox.y1 - li.bbox.y0;
+  const words = li.words || [];
+  const groups = [];
+  for (const w of words) {
+    const g = groups[groups.length - 1];
+    if (g && w.bbox.x0 - g[g.length - 1].bbox.x1 <= 4 * h) g.push(w);
+    else groups.push([w]);
+  }
+  if (groups.length < 2) {
+    const text = readable(li);
+    return text ? [{ text, ...li.bbox }] : [];
+  }
+  return groups.map((g) => {
+    const conf = g.reduce((n, w) => n + w.confidence, 0) / g.length;
+    const text = readable({ words: g, confidence: conf });
+    const box = { x0: g[0].bbox.x0, x1: g[g.length - 1].bbox.x1, y0: Math.min(...g.map((w) => w.bbox.y0)), y1: Math.max(...g.map((w) => w.bbox.y1)) };
+    return text ? { text, ...box } : null;
+  }).filter(Boolean);
+}
+
 export function cleanOcr(blocks) {
-  const paras = [];
+  // runs of consecutive blocks in one column: [{x0, x1, lines: [{text, x0, x1, y0, y1, part}]}]
+  const runs = [];
+  let blk = 0;
   for (const bl of blocks) {
+    blk += 1;
+    const lines = [];
     for (const pa of bl.paragraphs || []) {
-      const all = pa.lines || [];
-      const median = (xs) => xs.sort((a, b) => a - b)[xs.length >> 1] || 0;
-      const h = median(all.map((li) => li.bbox.y1 - li.bbox.y0));
-      const gaps = all.slice(1).map((li, k) => li.bbox.y0 - all[k].bbox.y1);
-      const wide = gaps.length >= 2 ? Math.max(1.5 * median(gaps), 0.5 * h) : Infinity;
-      let lines = [];
-      let lastY = null;
-      for (const li of all) {
-        const words = (li.words || []).filter((w) => !(SIGN.test(w.text) && w.confidence < 50));
-        const text = words.map((w) => w.text).join(' ').replace(/©(?=[\p{L}\d_])/gu, '@').trim();
-        if (!text || (li.confidence < 70 && !WORDISH.test(text))) continue;
-        if (lines.length && li.bbox.y0 - lastY > wide) {
-          paras.push(lines.join('\n'));
-          lines = [];
-        }
-        lines.push(text);
-        lastY = li.bbox.y1;
-      }
-      if (lines.length) paras.push(lines.join('\n'));
+      for (const li of pa.lines || []) for (const pc of pieces(li)) lines.push({ ...pc, blk });
     }
+    if (!lines.length) continue;
+    const x0 = Math.min(...lines.map((l) => l.x0));
+    const x1 = Math.max(...lines.map((l) => l.x1));
+    const last = runs[runs.length - 1];
+    const overlap = last ? Math.min(last.x1, x1) - Math.max(last.x0, x0) : 0;
+    if (last && overlap > 0.3 * Math.min(last.x1 - last.x0, x1 - x0)) {
+      last.lines.push(...lines);
+      last.x0 = Math.min(last.x0, x0);
+      last.x1 = Math.max(last.x1, x1);
+    } else runs.push({ x0, x1, lines });
+  }
+  const paras = [];
+  for (const run of runs) {
+    // top to bottom (stable: lines of one row keep Tesseract's order), then pieces of one row joined
+    const sorted = [...run.lines].sort((a, b) => a.y0 - b.y0);
+    const lh = median(sorted.map((l) => l.y1 - l.y0));
+    const rows = [];
+    for (const l of sorted) {
+      const row = rows[rows.length - 1];
+      const shared = row ? Math.min(row.y1, l.y1) - Math.max(row.y0, l.y0) : 0;
+      const apart = row ? Math.max(...row.pieces.map((q) => Math.max(q.x0 - l.x1, l.x0 - q.x1))) : 0;
+      if (row && shared > 0.5 * Math.min(row.y1 - row.y0, l.y1 - l.y0) && apart < 4 * lh) {
+        row.pieces.push(l);
+        row.y0 = Math.min(row.y0, l.y0);
+        row.y1 = Math.max(row.y1, l.y1);
+      } else rows.push({ y0: l.y0, y1: l.y1, blk: l.blk, pieces: [l] });
+    }
+    for (const row of rows) row.text = row.pieces.sort((a, b) => a.x0 - b.x0).map((l) => l.text).join(' ');
+    const h = median(rows.map((r) => r.y1 - r.y0));
+    const gaps = rows.slice(1).map((r, k) => r.y0 - rows[k].y1);
+    const wide = gaps.length >= 2 ? Math.max(1.5 * median(gaps), 0.5 * h) : Infinity;
+    let lines = [];
+    rows.forEach((r, k) => {
+      const gap = k ? r.y0 - rows[k - 1].y1 : 0;
+      // side by side (rows that overlap but stayed apart) is not one paragraph either
+      if (lines.length && (gap > wide || r.blk !== rows[k - 1].blk || gap < -0.3 * h)) {
+        paras.push(lines.join('\n'));
+        lines = [];
+      }
+      lines.push(r.text);
+    });
+    if (lines.length) paras.push(lines.join('\n'));
   }
   return paras.join('\n\n');
 }
@@ -75,7 +149,7 @@ export async function ocrImage(file, onProgress = () => {}) {
 // Each page drawn at about 2000 pixels wide (enough for body text, small enough for a phone's memory).
 export async function ocrPdf(pdf, onProgress = () => {}, pages = null) {
   const list = pages || Array.from({ length: pdf.numPages }, (_, i) => i + 1);
-  const blocks = [];
+  const read = []; // each page's paragraphs, as Tesseract's layout gives them
   for (let k = 0; k < list.length; k++) {
     const page = await pdf.getPage(list[k]);
     const base = page.getViewport({ scale: 1 });
@@ -92,9 +166,39 @@ export async function ocrPdf(pdf, onProgress = () => {}, pages = null) {
     canvas.width = 0;
     canvas.height = 0;
     page.cleanup();
-    for (const b of plainBlocks(text)) blocks.push({ ...b, page: list[k] });
+    read.push(text.split(/\n\n+/).map((t) => ({ text: t, page: list[k] })));
+  }
+  // running headers go first: plainBlocks would join one to the paragraph below it ("drdahiliye.com" starts in
+  // lower case, so it reads as the rest of a sentence)
+  const kept = dropRunning(read.flat(), list.length);
+  const blocks = [];
+  for (const page of list) {
+    const text = kept.filter((p) => p.page === page).map((p) => p.text).join('\n\n');
+    for (const b of plainBlocks(text)) blocks.push({ ...b, page });
   }
   return blocks;
+}
+
+// Running headers and footers: a page number standing alone, and a short block without digits or a colon that
+// comes back the same on at least 3 pages and 40 % of them ("HEMATOLOJİ - ONKOLOJİ", "drdahiliye.com" on every other
+// page). Lab values ("Hb: 12.9 g/dL", "PT: Normal") recur too, so a block with a digit or a colon always stays. A text
+// layer gets the same from js/text.js (dropFurniture, by position); here the text is all there is.
+function dropRunning(blocks, pages) {
+  if (pages < 4) return blocks;
+  const candidate = (b) => b.text.length <= 60 && !/[\d:\n]/.test(b.text);
+  const key = (b) => b.text.toLocaleLowerCase('tr').replace(/[^\p{L}]+/gu, ' ').trim();
+  const seen = new Map();
+  for (const b of blocks.filter(candidate)) {
+    if (!seen.has(key(b))) seen.set(key(b), new Set());
+    seen.get(key(b)).add(b.page);
+  }
+  const running = (b) => {
+    if (/^\W*\d{1,4}\W*$/.test(b.text)) return true;
+    if (!candidate(b)) return false;
+    const n = seen.get(key(b)).size;
+    return n >= 3 && n >= 0.4 * pages;
+  };
+  return blocks.filter((b) => !running(b));
 }
 
 export async function ocrDone() {
