@@ -15,6 +15,7 @@ import argparse
 import json
 import multiprocessing
 import os
+import re
 import signal
 import sys
 
@@ -22,6 +23,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(os.path.dirname(HERE))
 T = None
 LIMIT = 20
+_SURROGATE = re.compile('[\ud800-\udfff]')
 
 
 def _init():
@@ -72,8 +74,11 @@ def _run(line):
     out['normalize'] = _call(T.normalize, text)
     out['eval'] = _call(T.normalize_for_eval, text)
     out['itn'] = _call(T.inverse_normalize, text)
-    out['itn_spoken'] = _call(T.inverse_normalize, out['normalize']) if isinstance(out['normalize'], str) else None
-    out['itn_eval'] = _call(T.inverse_normalize, out['eval']) if isinstance(out['eval'], str) else None
+    # not for a form with a surrogate code point in it: two lone ones side by side are one astral character once
+    # the form is written to JSON (and in any JS string), so the port could not be given what Python was
+    for k, form in (('itn_spoken', out['normalize']), ('itn_eval', out['eval'])):
+        ok = isinstance(form, str) and not _SURROGATE.search(form)
+        out[k] = _call(T.inverse_normalize, form) if ok else None
     return _dump(out)
 
 
