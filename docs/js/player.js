@@ -17,7 +17,8 @@ import { wavBlob } from './wav.js';
 const PEAK_S = 0.05;
 const GROUP = 256;
 // When the listener has caught up with a making slower than speech, playback goes on once this much more is ready
-// (seconds), not after every sentence: a sentence, a pause, a sentence, a pause... is hard to listen to.
+// (seconds), not after every sentence: a sentence, a pause, a sentence, a pause... is hard to listen to. A making
+// that keeps up (or one too new to tell, under 10 s) goes on at once.
 const AHEAD = 20;
 
 export class Track {
@@ -208,6 +209,7 @@ export class Player {
     this.making = false; // more segments are coming
     this.waiting = false; // reached the end of what is ready while more is coming
     this.pendingT = null; // where a new source is going, until its metadata has loaded (it reads 0 till then)
+    this.growth = []; // [time, seconds ready] as the making goes on, for need()
     this.rate = 1;
     this.lastSeg = -1;
     this.raf = 0;
@@ -294,6 +296,7 @@ export class Player {
     this.expected = expected || 0;
     this.making = true;
     this.toldWaiting = false;
+    this.growth = [];
     this.lastSeg = -1;
     this.els.title.textContent = title;
     this.title = title;
@@ -335,6 +338,24 @@ export class Player {
   ahead() {
     const tr = this.track;
     return tr ? tr.duration - tr.start(this.urlCount) : 0;
+  }
+
+  // seconds that must be ready before playback goes on: none while the making keeps up with listening (seconds of
+  // audio made per second, over the last minute), AHEAD when it is slower
+  need() {
+    const g = this.growth;
+    if (!this.making || g.length < 2) return 0;
+    const [t0, d0] = g[0];
+    const [t1, d1] = g[g.length - 1];
+    const dt = (t1 - t0) / 1000;
+    return dt >= 10 && (d1 - d0) / dt < this.rate ? AHEAD : 0;
+  }
+
+  // more audio is ready
+  noteGrowth() {
+    const now = performance.now();
+    this.growth.push([now, this.track ? this.track.duration : 0]);
+    while (this.growth.length > 2 && now - this.growth[1][0] > 60000) this.growth.shift();
   }
 
   scale() {
@@ -500,13 +521,14 @@ export class Player {
   onEnded() {
     const tr = this.track;
     if (!tr) return;
-    if (tr.count > this.urlCount && (!this.making || this.ahead() >= AHEAD)) {
+    const need = this.need();
+    if (tr.count > this.urlCount && this.ahead() >= need) {
       this.refresh(tr.start(this.urlCount), true);
     } else if (this.making) {
       this.waiting = true; // grew() (or finished()) starts it again
-      if (!this.toldWaiting) {
+      if (need && !this.toldWaiting) {
         this.toldWaiting = true;
-        this.opts.onToast?.('Dinleme, sesin üretimine yetişti: biraz daha ses birikince kendiliğinden devam edecek.');
+        this.opts.onToast?.(`Ses bu cihazda, dinlediğinizden yavaş hazırlanıyor: ${AHEAD} saniyelik ses birikince kendiliğinden devam edecek.`, 7000);
       }
     }
     this.sync();
@@ -514,7 +536,8 @@ export class Player {
 
   // the worker sent another segment
   grew() {
-    if (this.waiting && this.track && this.track.count > this.urlCount && this.ahead() >= AHEAD) {
+    if (this.track) this.noteGrowth();
+    if (this.waiting && this.track && this.track.count > this.urlCount && this.ahead() >= this.need()) {
       this.waiting = false;
       this.refresh(this.track.start(this.urlCount), true);
     }

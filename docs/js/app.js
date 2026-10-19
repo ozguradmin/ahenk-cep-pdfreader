@@ -122,7 +122,7 @@ const player = new Player({
   info: WAV_INFO,
   artwork: [{ src: new URL('icons/icon-512.png', document.baseURI).href, sizes: '512x512', type: 'image/png' }],
   onSegment: (i) => highlight(i),
-  onToast: (m) => toast(m),
+  onToast: (m, ms) => toast(m, ms),
 });
 
 function showPlayer(on) {
@@ -792,7 +792,7 @@ function renderEstimate() {
 }
 $('est-tip-btn').addEventListener('click', () => {
   setSteps(8);
-  store('ahenk-okur-steps', '8');
+  store('ahenk-okur-quality', '8');
 });
 
 const speed = $('speed');
@@ -819,7 +819,7 @@ $('quality').addEventListener('click', (e) => {
   const b = e.target.closest('button');
   if (!b) return;
   setSteps(Number(b.dataset.steps));
-  store('ahenk-okur-steps', String(state.steps));
+  store('ahenk-okur-quality', String(state.steps));
 });
 $('quality').addEventListener('keydown', (e) => {
   if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(e.key)) return;
@@ -827,7 +827,7 @@ $('quality').addEventListener('keydown', (e) => {
   const order = [4, 8, 16];
   const i = order.indexOf(state.steps) + (e.key === 'ArrowRight' || e.key === 'ArrowDown' ? 1 : -1);
   setSteps(order[(i + 3) % 3]);
-  store('ahenk-okur-steps', String(state.steps));
+  store('ahenk-okur-quality', String(state.steps));
   $('quality').querySelector('[aria-checked="true"]').focus();
 });
 
@@ -1236,6 +1236,7 @@ $('resume').addEventListener('click', () => {
   job.error = '';
   keepAwake(true);
   player.making = true;
+  player.growth = []; // the making's pace is measured again
   if (state.ready) sendJob();
   else {
     job.state = 'waiting';
@@ -1795,7 +1796,9 @@ try {
   const m = JSON.parse(store('ahenk-okur-rtf') || 'null');
   if (m && m.rtf > 0 && m.rtf < 20 && [4, 8, 16].includes(m.steps)) state.measured = m;
 } catch { /* nothing saved */ }
-const savedSteps = Number(store('ahenk-okur-steps'));
+// a new key: the earlier one may hold "Dengeli" from a tip that called its sound almost the same; everyone starts
+// again from the best quality, and a choice made from now on is kept
+const savedSteps = Number(store('ahenk-okur-quality'));
 setSteps([4, 8, 16].includes(savedSteps) ? savedSteps : 16);
 setSpeed(Number(store('ahenk-okur-speed')) || 1);
 show(1);
