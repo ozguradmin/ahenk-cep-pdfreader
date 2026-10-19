@@ -16,6 +16,9 @@ import { wavBlob } from './wav.js';
 
 const PEAK_S = 0.05;
 const GROUP = 256;
+// When the listener has caught up with a making slower than speech, playback goes on once this much more is ready
+// (seconds), not after every sentence: a sentence, a pause, a sentence, a pause... is hard to listen to.
+const AHEAD = 20;
 
 export class Track {
   constructor(sampleRate, { keepPcm = 1800 } = {}) {
@@ -290,6 +293,7 @@ export class Player {
     this.track = track;
     this.expected = expected || 0;
     this.making = true;
+    this.toldWaiting = false;
     this.lastSeg = -1;
     this.els.title.textContent = title;
     this.title = title;
@@ -309,6 +313,8 @@ export class Player {
     this.urlCount = 0;
     this.waiting = false;
     this.pendingT = null;
+    clearInterval(this.settle);
+    this.audio.muted = false;
     this.track = null;
   }
 
@@ -320,8 +326,15 @@ export class Player {
 
   // to time t in the current source; before its metadata, the source goes there once it has loaded
   moveTo(t) {
+    this.target = t;
     if (this.pendingT !== null) this.pendingT = t;
     else this.audio.currentTime = t;
+  }
+
+  // seconds ready after what the element has
+  ahead() {
+    const tr = this.track;
+    return tr ? tr.duration - tr.start(this.urlCount) : 0;
   }
 
   scale() {
@@ -339,17 +352,17 @@ export class Player {
     this.url = url;
     this.urlCount = tr.count;
     this.pendingT = t;
+    this.target = t;
     const a = this.audio;
+    clearInterval(this.settle);
     a.src = url;
     a.playbackRate = this.rate;
-    // play() is called at once, still inside the tap that asked for it (iOS refuses a later one); muted until it
-    // has moved to t, so the first moments of the WAV are not heard
+    // play() is called at once, still inside the tap that asked for it (iOS refuses a later one), so the element
+    // starts at 0:00: muted until it is really at t (see below)
+    const far = play && t > 0.05;
+    a.muted = far;
     let started = null;
     if (play) {
-      if (t > 0.05) {
-        a.muted = true;
-        setTimeout(() => { a.muted = false; }, 1500); // whatever happens, never stuck silent
-      }
       started = this.playEl().then((r) => {
         if (r !== 'playing') a.muted = false;
         return r;
@@ -362,14 +375,37 @@ export class Player {
         // the latest target: a tap or a seek made while this loaded wins over the one it was made for
         const to = Math.min(this.pendingT !== null ? this.pendingT : t, tr.duration);
         this.pendingT = null;
-        if (a.muted) a.addEventListener('seeked', () => { a.muted = false; }, { once: true });
-        try { a.currentTime = to; } catch { a.muted = false; }
-        if (to <= 0.05) a.muted = false;
+        this.target = to;
+        try { a.currentTime = to; } catch { /* the check below tries again */ }
         return resolve();
       };
       a.addEventListener('loadedmetadata', go);
     });
-    a.addEventListener('error', () => { if (this.url === url) this.pendingT = null; }, { once: true });
+    if (far) {
+      // The sound comes back only once the element is where it should be. Safari may ignore a seek made this early,
+      // and a long file can take seconds to load on a phone: unmuting after a fixed time played the document from
+      // its start, then jumped. So the seek is checked, and made again, until it holds (20 s at most).
+      const t0 = performance.now();
+      const done = () => {
+        clearInterval(this.settle);
+        if (this.url === url) a.muted = false;
+      };
+      this.settle = setInterval(() => {
+        if (this.url !== url || performance.now() - t0 > 20000) return done();
+        if (this.pendingT !== null) return undefined; // no metadata yet
+        if (Math.abs(a.currentTime - this.target) < 1.5) return done();
+        if (!a.seeking) {
+          try { a.currentTime = this.target; } catch { /* again next time */ }
+        }
+        return undefined;
+      }, 150);
+    }
+    a.addEventListener('error', () => {
+      if (this.url !== url) return;
+      this.pendingT = null;
+      clearInterval(this.settle);
+      a.muted = false;
+    }, { once: true });
     if (old) setTimeout(() => URL.revokeObjectURL(old), 4000);
     return started ? Promise.all([ready, started]).then(([, r]) => r) : ready;
   }
@@ -464,17 +500,21 @@ export class Player {
   onEnded() {
     const tr = this.track;
     if (!tr) return;
-    if (tr.count > this.urlCount) {
+    if (tr.count > this.urlCount && (!this.making || this.ahead() >= AHEAD)) {
       this.refresh(tr.start(this.urlCount), true);
     } else if (this.making) {
-      this.waiting = true; // grew() starts it again
+      this.waiting = true; // grew() (or finished()) starts it again
+      if (!this.toldWaiting) {
+        this.toldWaiting = true;
+        this.opts.onToast?.('Dinleme, sesin üretimine yetişti: biraz daha ses birikince kendiliğinden devam edecek.');
+      }
     }
     this.sync();
   }
 
   // the worker sent another segment
   grew() {
-    if (this.waiting && this.track && this.track.count > this.urlCount) {
+    if (this.waiting && this.track && this.track.count > this.urlCount && this.ahead() >= AHEAD) {
       this.waiting = false;
       this.refresh(this.track.start(this.urlCount), true);
     }

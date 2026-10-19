@@ -105,13 +105,12 @@
   <main>
     <section class="hero wrap">
       <div class="hero-copy">
-        <p class="eyebrow"><span>PDF</span><span>Word</span><span>EPUB</span><span>Metin</span><span class="arrow" aria-hidden="true">→</span><span>Türkçe ses</span></p>
-        <h1>Belgelerinizi <em>dinleyin.</em></h1>
+        <h1>Belgelerinizi dinleyin.</h1>
         <p class="lede">Dosyanızı bırakın; Ahenk Okur metni ayıklar ve doğal bir Türkçe sesle okur. Üretilirken dinlemeye başlayın, bitince MP3 ya da WAV olarak indirin. Hepsi tarayıcınızda olur, dosyanız cihazınızdan çıkmaz.</p>
         <ul class="facts">
-          <li><svg class="ic" aria-hidden="true"><use href="#i-lock"/></svg>Cihazınızda çalışır</li>
-          <li><svg class="ic" aria-hidden="true"><use href="#i-spark"/></svg>Ücretsiz, kayıt yok</li>
-          <li><svg class="ic" aria-hidden="true"><use href="#i-down"/></svg>MP3 ve WAV indirme</li>
+          <li>PDF, Word, EPUB, metin, fotoğraf</li>
+          <li>Ücretsiz, kayıt yok</li>
+          <li>MP3 ve WAV indirme</li>
         </ul>
       </div>
 
@@ -168,7 +167,7 @@
           </div>
           <div class="alt-row">
             <button class="btn btn-ghost" id="paste-btn" type="button"><svg class="ic" aria-hidden="true"><use href="#i-text"/></svg>Metin yapıştır</button>
-            <button class="btn btn-ghost" id="sample-btn" type="button"><svg class="ic" aria-hidden="true"><use href="#i-spark"/></svg>Örnek metinle dene</button>
+            <button class="btn btn-ghost" id="sample-btn" type="button"><svg class="ic" aria-hidden="true"><use href="#i-headphones"/></svg>Örnek metinle dene</button>
           </div>
           <section class="saved" id="saved" hidden aria-labelledby="saved-title">
             <h2 class="saved-title" id="saved-title">Kaydedilen dönüştürmeler</h2>
@@ -240,7 +239,7 @@
             </div>
             <button class="btn btn-primary btn-lg" id="go" type="button"><svg class="ic" aria-hidden="true"><use href="#i-wave"/></svg><span id="go-label">Sese dönüştür</span></button>
           </div>
-          <p class="est-tip" id="est-tip" hidden><svg class="ic" aria-hidden="true"><use href="#i-spark"/></svg><span id="est-tip-text"></span> <button class="link-btn" id="est-tip-btn" type="button">Dengeli'ye geç</button></p>
+          <p class="est-tip" id="est-tip" hidden><svg class="ic" aria-hidden="true"><use href="#i-info"/></svg><span id="est-tip-text"></span> <button class="link-btn" id="est-tip-btn" type="button">Dengeli'ye geç</button></p>
           <p class="form-msg" id="text-msg" role="alert" hidden></p>
         </div>
 
@@ -296,17 +295,17 @@
       <h2 id="how-title">Nasıl çalışır?</h2>
       <ol class="how-grid">
         <li>
-          <span class="how-num">01</span>
+          <span class="how-num">1</span>
           <h3>Belgeyi ayıklar</h3>
           <p>PDF'lerde sütunları, satır sonunda bölünmüş kelimeleri, sayfa numaralarını ve üst bilgileri ayıklar. Taranmış sayfaları Türkçe OCR ile okur.</p>
         </li>
         <li>
-          <span class="how-num">02</span>
+          <span class="how-num">2</span>
           <h3>Okunuşa çevirir</h3>
           <p>Tarih, saat, para ve sayıları yazıldığı gibi değil, okunduğu gibi söyler: “14.10.2026” olur “on dört Ekim iki bin yirmi altı”.</p>
         </li>
         <li>
-          <span class="how-num">03</span>
+          <span class="how-num">3</span>
           <h3>Sesi üretir</h3>
           <p>Ahenk Cep modeli 48 kHz ses üretir. Kaç yüzde kaldığını ve kalan süreyi görürsünüz; hazır olan bölümleri hemen dinleyebilirsiniz.</p>
         </li>
@@ -335,7 +334,7 @@
         <p class="hint">Ses: <a id="link-cep" href="https://huggingface.co/ozgurguler/ahenk-cep-tr">Ahenk Cep</a> (CC BY 4.0), <a href="https://github.com/ozguradmin/ahenk-turkish-tts">Ahenk</a> · temel model <a href="https://huggingface.co/canberkkkkkk/ema-lightning">EMA Lightning</a> (Apache-2.0).</p>
       </div>
       <div class="foot-meta">
-        <p class="hint">Belge okuma <a href="https://mozilla.github.io/pdf.js/">pdf.js</a> ve <a href="https://tesseract.projectnaptha.com/">Tesseract</a>, model <a href="https://onnxruntime.ai/">onnxruntime-web</a> ve <a href="https://pyodide.org/">Pyodide</a> ile çalışır. <a id="link-github" href="https://github.com/ozguradmin/ahenk-cep-pdfreader">Kaynak kodu</a></p>
+        <p class="hint">Belge okuma <a href="https://mozilla.github.io/pdf.js/">pdf.js</a> ve <a href="https://tesseract.projectnaptha.com/">Tesseract</a>, model <a href="https://onnxruntime.ai/">onnxruntime-web</a> ile, metin <a href="https://github.com/ozguradmin/trnorm-js">trnorm-js</a> ile çalışır. <a id="link-github" href="https://github.com/ozguradmin/ahenk-cep-pdfreader">Kaynak kodu</a></p>
         <p class="hint num" id="tech"></p>
       </div>
     </div>

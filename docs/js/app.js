@@ -782,12 +782,13 @@ function renderEstimate() {
   const audio = speechSeconds(chars + 2.5 * digits, state.speed);
   $('est-audio').textContent = chars ? dur(audio, { approx: true }) : '–';
   $('est-make').textContent = chars ? dur(audio * rtf(state.steps), { approx: true }) : '–';
-  // A long job at the best quality: say what "Dengeli" (8 steps) would save. The choice stays the visitor's; the
-  // model card measures the difference as small (UTMOS 3.44 at 16 steps, 3.30 at 8, the same word error rate).
+  // A long job at the best quality: say what "Dengeli" (8 steps) would save, and what it costs. The choice stays the
+  // visitor's: the model card measures UTMOS 3.44 at 16 steps and 3.30 at 8, and fewer steps sound brighter (the
+  // sample's spectral centroid: 736 Hz at 16, 805 Hz at 8, 918 Hz at 4).
   const saved = audio * (rtf(16) - rtf(8));
   const tip = state.steps === 16 && saved > 10 * 60;
   $('est-tip').hidden = !tip;
-  if (tip) $('est-tip-text').textContent = `“Dengeli” kalite bu belgeyi ${dur(saved, { approx: true }).replace('≈ ', 'yaklaşık ')} daha kısa sürede hazırlar; ses neredeyse aynı kalır.`;
+  if (tip) $('est-tip-text').textContent = `“Dengeli” kalite bu belgeyi ${dur(saved, { approx: true }).replace('≈ ', 'yaklaşık ')} daha kısa sürede hazırlar, ama ses biraz daha tiz ve daha az doğal olur.`;
 }
 $('est-tip-btn').addEventListener('click', () => {
   setSteps(8);
@@ -807,7 +808,7 @@ speed.addEventListener('input', () => {
   store('ahenk-okur-speed', String(state.speed));
 });
 
-const Q_HINT = { 4: 'en hızlı, biraz daha az doğal', 8: 'hızlı ve doğal', 16: 'en doğal ses' };
+const Q_HINT = { 4: 'en hızlı; ses belirgin biçimde tiz', 8: 'yaklaşık iki kat hızlı; ses biraz daha tiz', 16: 'en doğal ses' };
 function setSteps(n) {
   state.steps = [4, 8, 16].includes(n) ? n : 16;
   for (const b of $('quality').children) b.setAttribute('aria-checked', String(Number(b.dataset.steps) === state.steps));
@@ -1795,7 +1796,7 @@ try {
   if (m && m.rtf > 0 && m.rtf < 20 && [4, 8, 16].includes(m.steps)) state.measured = m;
 } catch { /* nothing saved */ }
 const savedSteps = Number(store('ahenk-okur-steps'));
-setSteps([4, 8, 16].includes(savedSteps) ? savedSteps : device.mobile ? 8 : 16);
+setSteps([4, 8, 16].includes(savedSteps) ? savedSteps : 16);
 setSpeed(Number(store('ahenk-okur-speed')) || 1);
 show(1);
 renderModel();

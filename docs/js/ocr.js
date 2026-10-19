@@ -28,8 +28,43 @@ async function recognize(image, i, n, onProgress) {
   };
   const w = await worker();
   onProgress({ stage: 'ocr', done: i, total: n, frac: i / n });
-  const { data } = await w.recognize(image);
-  return data.text || '';
+  const { data } = await w.recognize(image, {}, { text: true, blocks: true });
+  return data.blocks ? cleanOcr(data.blocks) : data.text || '';
+}
+
+// Tesseract's text, without what it read from icons and pictures: a line it is unsure of (confidence under 70)
+// that holds no word of two letters ("5 9 ©" from a like button), and a word without a letter or digit it is
+// unsure of ("«", "..."). A "©" right before a name is an "@" (a handle). Lines keep their breaks; a paragraph of
+// Tesseract's, or a gap between two lines well beyond the paragraph's usual line gap (Tesseract often takes a
+// screenshot's text and the buttons under it for one paragraph), becomes a blank line, for plainBlocks.
+const WORDISH = /\p{L}{2}/u;
+const SIGN = /^[^\p{L}\p{N}]+$/u;
+export function cleanOcr(blocks) {
+  const paras = [];
+  for (const bl of blocks) {
+    for (const pa of bl.paragraphs || []) {
+      const all = pa.lines || [];
+      const median = (xs) => xs.sort((a, b) => a - b)[xs.length >> 1] || 0;
+      const h = median(all.map((li) => li.bbox.y1 - li.bbox.y0));
+      const gaps = all.slice(1).map((li, k) => li.bbox.y0 - all[k].bbox.y1);
+      const wide = gaps.length >= 2 ? Math.max(1.5 * median(gaps), 0.5 * h) : Infinity;
+      let lines = [];
+      let lastY = null;
+      for (const li of all) {
+        const words = (li.words || []).filter((w) => !(SIGN.test(w.text) && w.confidence < 50));
+        const text = words.map((w) => w.text).join(' ').replace(/©(?=[\p{L}\d_])/gu, '@').trim();
+        if (!text || (li.confidence < 70 && !WORDISH.test(text))) continue;
+        if (lines.length && li.bbox.y0 - lastY > wide) {
+          paras.push(lines.join('\n'));
+          lines = [];
+        }
+        lines.push(text);
+        lastY = li.bbox.y1;
+      }
+      if (lines.length) paras.push(lines.join('\n'));
+    }
+  }
+  return paras.join('\n\n');
 }
 
 export async function ocrImage(file, onProgress = () => {}) {
