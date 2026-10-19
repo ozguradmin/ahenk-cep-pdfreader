@@ -8,10 +8,12 @@
 //     number_to_words(n)       cardinal number reading (n: a BigInt or a safe integer is an int; another number is
 //                              read as the Python float it is, true / false as 1 / 0, anything else: TypeError)
 //     ordinal_to_words(n)      ordinal number reading (the same arguments)
-// normalize_for_eval and inverse_normalize (itn.py) are not ported: the reader's front-end does not use them.
+//     normalize_for_eval(text) canonical form for ASR/TTS scoring (WER/CER)
+//     inverse_normalize(text)  spoken form -> digits (for ASR output display)
 
 export { tr_lower, tr_upper } from './casing.js';
 export { number_to_words, ordinal_to_words } from './numbers.js';
-export { normalize, normalize_for_frontend } from './normalizer.js';
+export { normalize, normalize_for_eval, normalize_for_frontend } from './normalizer.js';
+export { inverse_normalize } from './itn.js';
 
 export const __version__ = '0.1.0';

@@ -1,4 +1,5 @@
-// trnorm/normalizer.py in JavaScript: written Turkish -> spoken Turkish (normalize; normalize_for_eval is not ported).
+// trnorm/normalizer.py in JavaScript: written Turkish -> spoken Turkish (normalize), and the canonical form for scoring
+// ASR and TTS (normalize_for_eval).
 //
 // The normalizer is a sequence of regex passes, from the most specific patterns (URLs, phone numbers, dates, times,
 // money) to the most generic (bare numbers, acronyms, symbols). Every numeric pass understands an optional apostrophe
@@ -1430,6 +1431,9 @@ function _normalize(text) {
   return [out, out];
 }
 
+// for itn.js, which has the same need
+export { _pin as pin_newer, _unpin as unpin_newer };
+
 // For tools/parity/matchers_check.mjs: each linear matcher with the pattern it stands for, as Python writes it
 export const _testing = {
   url: [_URL_RE, _URL_SRC],
@@ -1460,4 +1464,50 @@ function _run(text, passes) {
   text = _preclean(text);
   for (const p of passes) text = p(text);
   return text;
+}
+
+// ---- normalize_for_eval ------------------------------------------------------------------------------------------
+
+// The eval form keeps foreign names and single letters as written: ASR output and references spell "iPhone", "John
+// F. Kennedy", "X'te", and lowercase ASR output ("x'te", "f") must still match them.
+const _EVAL_PASSES = _PASSES.filter((p) => p !== _pass_names && p !== _pass_letter_names);
+const _CIRCUMFLEX = { â: 'a', î: 'i', û: 'u', Â: 'a', Î: 'i', Û: 'u' };
+const _CIRCUMFLEX_RE = /[âîûÂÎÛ]/g;
+
+const _LOWER_ACRONYM_RE = re.compile(`${nlb(`${WC}'`)}([${LOW}]{2,6})(?:'([${LOW}]+))?(?!${W})`);
+
+// Lowercase ASR output and references write "abd", "tbmm"; treat them like "ABD", "TBMM".
+function _uppercase_known_acronyms(text) {
+  return _LOWER_ACRONYM_RE.sub((m) => {
+    const up = tr_upper(m[1]);
+    if (!L.EVAL_ACRONYMS.has(up)) return m[0];
+    return up + (m[2] ? `'${m[2]}` : '');
+  }, text);
+}
+
+const _BUCUK_RE = re.compile(`${B}buçuk${B}`, has('ç'));
+const _INNER_APOSTROPHE_RE = re.compile(`${lb(WC)}'(?=${W})`, has("'"));
+const _NOT_WORD_RE = re.compile(`[^${WC}${SC}]|_`);
+
+// Canonical form for WER/CER: spoken form, Turkish lowercase, no punctuation. Apply the same function to references
+// and hypotheses.
+//
+// The passes run on the text with its unassigned characters and lone surrogates swapped for placeholders, as in
+// normalize(); none of them survives the last steps (to Python they are neither \w nor \s, so each becomes a space,
+// as the placeholder does), so nothing is swapped back.
+export function normalize_for_eval(text) {
+  if (typeof text !== 'string') throw type_error(`expected string or bytes-like object, got '${typeof text}'`);
+  const [pinned, unassigned, lone] = _pin(text);
+  let out = _run(_uppercase_known_acronyms(pinned), _EVAL_PASSES);
+  if ((unassigned.length || lone.length) && _unpin(out, unassigned, lone, false) === null) {
+    out = _run(_uppercase_known_acronyms(text), _EVAL_PASSES); // a count changed (no pass is known to do that)
+  }
+  out = tr_lower(out).replace(_CIRCUMFLEX_RE, (c) => _CIRCUMFLEX[c]);
+  // "bir buçuk" and "bir virgül beş" are the same quantity
+  out = _BUCUK_RE.sub('virgül beş', out);
+  out = _INNER_APOSTROPHE_RE.sub('', out);
+  // the apostrophe gone, two characters meet that a buggy engine reads as one (py.js U_PAIR_BUG)
+  if (U_PAIR_BUG && U_PAIR_RE.test(out)) throw _engine_error(out);
+  out = _NOT_WORD_RE.sub(' ', out);
+  return split(out).join(' ');
 }
